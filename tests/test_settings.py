@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from qoder2api.settings import (
+    Settings,
     discover_infer_endpoint,
+    discover_namespaced_login_script,
     discover_qoder_cli_path,
     discover_qoder_home,
 )
@@ -40,3 +42,22 @@ def test_discover_infer_endpoint_from_qoder_config(tmp_path: Path) -> None:
     )
 
     assert discover_infer_endpoint(qoder_home) == "https://api3.qoder.sh"
+
+
+def test_browser_login_backend_defaults_to_namespaced_and_respects_override(tmp_path: Path) -> None:
+    base = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    override = Settings(
+        qoder_home=str(tmp_path / ".qoder"),
+        workspace=str(tmp_path),
+        browser_login_backend="direct",
+    )
+
+    assert base.browser_login_backend_name == "namespaced"
+    assert override.browser_login_backend_name == "direct"
+
+
+def test_discover_namespaced_login_script_defaults_to_xieyi_builder() -> None:
+    script_path = discover_namespaced_login_script()
+
+    assert script_path.name == "qoder_pure_batch_builder.py"
+    assert "xieyi" in script_path.parts

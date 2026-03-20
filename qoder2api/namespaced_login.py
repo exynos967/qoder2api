@@ -1,32 +1,27 @@
-"""通过外部 namespaced Qoder 工作流完成网页登录。"""
+"""通过 xieyi 纯协议设备工作流完成 namespaced 浏览器登录。"""
 
 from __future__ import annotations
 
 import json
-import os
-import select
-import signal
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlparse
 
-from .auth_state import (
-    CachedUserInfo,
-    ensure_auth_fields,
-    save_cached_user_info,
-    save_machine_id,
-)
-from .qoder_api import QoderAPIError
+from .auth_state import CachedUserInfo, ensure_auth_dir
+from .qoder_api import BrowserLoginContext, QoderAPIClient, QoderAPIError
 from .settings import Settings
 
-_LOGIN_URL_PREFIX = "LOGIN_URL="
-_WORK_DIR_PREFIX = "WORK_DIR="
-_MACHINE_TOKEN_PREFIX = "MACHINE_TOKEN="
-_MACHINE_TYPE_PREFIX = "MACHINE_TYPE="
+_DEVICE_METADATA_NAME = "xieyi_device.json"
+_DEFAULT_PROTOCOL_TIMEOUT_SECONDS = 30
+
+
+@dataclass(slots=True)
+class XieyiDeviceIdentity:
+    output_dir: Path
+    summary: dict[str, Any]
+    selected_result: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -35,99 +30,49 @@ class NamespacedBrowserLoginContext:
     work_dir: Path
     machine_token: str
     machine_type: str
-    process: subprocess.Popen[str]
+    direct_context: BrowserLoginContext
     buffered_output: list[str]
 
 
 class NamespacedBrowserLoginClient:
-    """适配外部 namespaced 登录脚本，接口保持与 QoderAPIClient 一致。"""
+    """先跑 xieyi 纯协议设备构建，再复用独立网页登录轮询。"""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        api_client: QoderAPIClient | None = None,
+        builder_runner: Callable[[Path], XieyiDeviceIdentity] | None = None,
+    ) -> None:
         self.settings = settings
+        self.api_client = api_client or QoderAPIClient(settings)
+        self._builder_runner = builder_runner or self._run_xieyi_builder
 
     def create_browser_login(self, qoder_home: Path) -> NamespacedBrowserLoginContext:
         script_path = self.settings.namespaced_login_script_path
         if not script_path.is_file():
             raise QoderAPIError(
-                f"找不到 namespaced 登录脚本: {script_path}",
+                f"找不到 xieyi 纯协议脚本: {script_path}",
                 status_code=500,
                 error_type="configuration_error",
             )
 
-        cmd = [
-            sys.executable,
-            str(script_path),
-            "--max-attempts",
-            str(self.settings.namespaced_login_max_attempts),
-            "--timeout",
-            str(self.settings.namespaced_login_timeout_seconds),
-            "--dump-user-plan",
-            "--json",
-        ]
-        output_root = self.settings.namespaced_login_output_root_path
-        if output_root is not None:
-            cmd.extend(["--output-root", str(output_root)])
-
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(script_path.parent),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            start_new_session=True,
+        identity = self._builder_runner(script_path)
+        direct_context = self.api_client.create_browser_login(qoder_home)
+        self._persist_device_identity(
+            qoder_home=qoder_home,
+            identity=identity,
+            direct_context=direct_context,
         )
-        if process.stdout is None:
-            raise QoderAPIError("无法读取 namespaced 登录脚本输出", status_code=500)
-
-        buffered_output: list[str] = []
-        auth_url = ""
-        work_dir = Path()
-        machine_token = ""
-        machine_type = ""
-        deadline = time.monotonic() + 30
-
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                buffered_output.extend(self._drain_available_lines(process))
-                raise QoderAPIError(
-                    self._join_output(buffered_output) or "namespaced 登录脚本提前退出",
-                    status_code=502,
-                    error_type="api_error",
-                )
-
-            ready, _, _ = select.select([process.stdout], [], [], 0.5)
-            if not ready:
-                continue
-            line = process.stdout.readline()
-            if not line:
-                continue
-            stripped = line.rstrip("\n")
-            buffered_output.append(stripped)
-            if stripped.startswith(_LOGIN_URL_PREFIX):
-                auth_url = stripped.removeprefix(_LOGIN_URL_PREFIX).strip()
-            elif stripped.startswith(_WORK_DIR_PREFIX):
-                work_dir = Path(stripped.removeprefix(_WORK_DIR_PREFIX).strip()).resolve()
-            elif stripped.startswith(_MACHINE_TOKEN_PREFIX):
-                machine_token = stripped.removeprefix(_MACHINE_TOKEN_PREFIX).strip()
-            elif stripped.startswith(_MACHINE_TYPE_PREFIX):
-                machine_type = stripped.removeprefix(_MACHINE_TYPE_PREFIX).strip()
-
-            if auth_url and work_dir:
-                return NamespacedBrowserLoginContext(
-                    auth_url=auth_url,
-                    work_dir=work_dir,
-                    machine_token=machine_token,
-                    machine_type=machine_type,
-                    process=process,
-                    buffered_output=buffered_output,
-                )
-
-        self._terminate_process(process)
-        raise QoderAPIError(
-            "等待 namespaced 登录地址超时",
-            status_code=504,
-            error_type="timeout_error",
+        prelude = self._build_prelude_lines(identity, direct_context)
+        selected = identity.selected_result
+        return NamespacedBrowserLoginContext(
+            auth_url=direct_context.auth_url,
+            work_dir=identity.output_dir,
+            machine_token=str(selected.get("machine_token") or ""),
+            machine_type=str(selected.get("machine_type") or ""),
+            direct_context=direct_context,
+            buffered_output=prelude,
         )
 
     async def complete_browser_login(
@@ -140,54 +85,147 @@ class NamespacedBrowserLoginClient:
     ) -> CachedUserInfo:
         for line in context.buffered_output:
             self._emit(progress_callback, line)
+        return await self.api_client.complete_browser_login(
+            qoder_home=qoder_home,
+            context=context.direct_context,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
 
-        process = context.process
-        stdout = process.stdout
-        if stdout is None:
-            raise QoderAPIError("namespaced 登录脚本 stdout 不可用", status_code=500)
+    def _run_xieyi_builder(self, script_path: Path) -> XieyiDeviceIdentity:
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--count",
+            str(self.settings.namespaced_login_max_attempts),
+            "--json",
+        ]
+        output_root = self.settings.namespaced_login_output_root_path
+        if output_root is not None:
+            cmd.extend(["--output-root", str(output_root)])
 
-        while True:
-            if cancel_check and cancel_check():
-                self._terminate_process(process)
-                raise QoderAPIError(
-                    "登录已取消",
-                    status_code=409,
-                    error_type="cancelled",
-                )
+        protocol_timeout = min(
+            self.settings.namespaced_login_timeout_seconds,
+            _DEFAULT_PROTOCOL_TIMEOUT_SECONDS,
+        )
+        cmd.extend(["--timeout", str(protocol_timeout)])
+        process_timeout = max(
+            protocol_timeout * self.settings.namespaced_login_max_attempts + 10,
+            protocol_timeout + 10,
+        )
 
-            ready, _, _ = select.select([stdout], [], [], 0.5)
-            if ready:
-                line = stdout.readline()
-                if line:
-                    stripped = line.rstrip("\n")
-                    context.buffered_output.append(stripped)
-                    self._emit(progress_callback, stripped)
-                    continue
-
-            if process.poll() is not None:
-                context.buffered_output.extend(self._drain_available_lines(process))
-                break
-
-        if process.returncode != 0:
+        try:
+            completed = subprocess.run(
+                cmd,
+                cwd=str(script_path.parent),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=process_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
             raise QoderAPIError(
-                self._join_output(context.buffered_output) or "namespaced 登录脚本执行失败",
+                f"xieyi 纯协议设备构建超时（>{process_timeout}s）",
+                status_code=504,
+                error_type="timeout_error",
+            ) from exc
+        except OSError as exc:
+            raise QoderAPIError(
+                f"启动 xieyi 纯协议脚本失败: {exc}",
+                status_code=500,
+                error_type="configuration_error",
+            ) from exc
+
+        if completed.returncode != 0:
+            detail = self._join_output(completed.stdout, completed.stderr)
+            raise QoderAPIError(
+                detail or "xieyi 纯协议设备构建失败",
                 status_code=502,
                 error_type="api_error",
             )
 
-        summary = self._load_summary(context.work_dir)
-        final_status = summary.get("final_status") or {}
-        login_payload = summary.get("login") or {}
-        machine_id = self._extract_machine_id(str(login_payload.get("loginUrl") or context.auth_url))
-        if not machine_id:
-            raise QoderAPIError("namespaced 登录结果缺少 machine_id", status_code=500)
+        summary = self._parse_summary_output(completed.stdout)
+        output_dir = Path(str(summary.get("output_dir") or "")).expanduser().resolve()
+        if not summary.get("output_dir"):
+            raise QoderAPIError("xieyi 输出缺少 output_dir", status_code=500)
 
-        info = self._build_cached_user_info(final_status)
-        ensure_auth_fields(info)
-        save_machine_id(qoder_home, machine_id)
-        save_cached_user_info(qoder_home, info)
-        self._emit(progress_callback, f"登录成功，当前账号：{info.name or info.uid}")
-        return info
+        results = summary.get("results")
+        if not isinstance(results, list):
+            raise QoderAPIError("xieyi 输出缺少 results", status_code=500)
+
+        selected = next(
+            (
+                item
+                for item in results
+                if isinstance(item, dict) and bool(item.get("success"))
+            ),
+            None,
+        )
+        if selected is None:
+            raise QoderAPIError(
+                self._build_failure_message(summary),
+                status_code=502,
+                error_type="api_error",
+            )
+
+        return XieyiDeviceIdentity(
+            output_dir=output_dir,
+            summary=summary,
+            selected_result=selected,
+        )
+
+    def _persist_device_identity(
+        self,
+        *,
+        qoder_home: Path,
+        identity: XieyiDeviceIdentity,
+        direct_context: BrowserLoginContext,
+    ) -> None:
+        auth_dir = ensure_auth_dir(qoder_home)
+        selected = identity.selected_result
+        payload = {
+            "workflow": "xieyi",
+            "output_dir": str(identity.output_dir),
+            "summary_path": str(identity.output_dir / "summary.json"),
+            "seed": identity.summary.get("seed"),
+            "count": identity.summary.get("count"),
+            "success_count": identity.summary.get("success_count"),
+            "machine_id": direct_context.machine_id,
+            "machine_token": str(selected.get("machine_token") or ""),
+            "machine_type": str(selected.get("machine_type") or ""),
+            "hostname": str(selected.get("hostname") or ""),
+            "mac": str(selected.get("mac") or ""),
+            "response_path": str(selected.get("response_path") or ""),
+        }
+        (auth_dir / _DEVICE_METADATA_NAME).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _build_prelude_lines(
+        self,
+        identity: XieyiDeviceIdentity,
+        direct_context: BrowserLoginContext,
+    ) -> list[str]:
+        selected = identity.selected_result
+        return [
+            "xieyi 纯协议设备构建完成，开始创建网页登录链接。",
+            f"WORK_DIR={identity.output_dir}",
+            f"MACHINE_TOKEN_PREVIEW={self._mask_secret(str(selected.get('machine_token') or ''))}",
+            f"MACHINE_TYPE={str(selected.get('machine_type') or '')}",
+            f"DEVICE_HOSTNAME={str(selected.get('hostname') or '')}",
+            f"DEVICE_MAC={str(selected.get('mac') or '')}",
+            f"MACHINE_ID={direct_context.machine_id}",
+        ]
+
+    @staticmethod
+    def _mask_secret(value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) <= 16:
+            return normalized
+        return f"{normalized[:8]}...{normalized[-6:]}"
 
     @staticmethod
     def _emit(callback: Callable[[str], None] | None, message: str) -> None:
@@ -195,89 +233,43 @@ class NamespacedBrowserLoginClient:
             callback(message)
 
     @staticmethod
-    def _join_output(lines: list[str]) -> str:
-        meaningful = [line for line in lines if line.strip()]
-        return "\n".join(meaningful[-80:])
+    def _join_output(stdout: str, stderr: str) -> str:
+        chunks = [stdout.strip(), stderr.strip()]
+        meaningful = [item for item in chunks if item]
+        if not meaningful:
+            return ""
+        return "\n".join(meaningful)[-4000:]
 
     @staticmethod
-    def _drain_available_lines(process: subprocess.Popen[str]) -> list[str]:
-        stdout = process.stdout
-        if stdout is None:
-            return []
-        collected: list[str] = []
-        while True:
-            ready, _, _ = select.select([stdout], [], [], 0)
-            if not ready:
-                break
-            line = stdout.readline()
-            if not line:
-                break
-            collected.append(line.rstrip("\n"))
-        return collected
-
-    @staticmethod
-    def _terminate_process(process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
+    def _parse_summary_output(stdout: str) -> dict[str, Any]:
+        text = stdout.strip()
+        if not text:
+            raise QoderAPIError("xieyi 没有输出任何结果", status_code=500)
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        except OSError:
-            process.terminate()
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                return
-            time.sleep(0.2)
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except OSError:
-            process.kill()
-
-    @staticmethod
-    def _load_summary(work_dir: Path) -> dict[str, Any]:
-        summary_path = work_dir.parent.parent / "summary.json"
-        if not summary_path.is_file():
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
             raise QoderAPIError(
-                f"找不到 namespaced 登录汇总文件: {summary_path}",
-                status_code=500,
-                error_type="api_error",
-            )
-        try:
-            return json.loads(summary_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise QoderAPIError(
-                f"读取 namespaced 登录汇总失败: {exc}",
+                f"解析 xieyi 输出失败: {exc}",
                 status_code=500,
                 error_type="api_error",
             ) from exc
+        if not isinstance(payload, dict):
+            raise QoderAPIError("xieyi 输出格式异常", status_code=500)
+        return payload
 
     @staticmethod
-    def _extract_machine_id(login_url: str) -> str:
-        query = parse_qs(urlparse(login_url).query)
-        return (query.get("machine_id") or [""])[0].strip()
-
-    @staticmethod
-    def _build_cached_user_info(final_status: dict[str, Any]) -> CachedUserInfo:
-        now_ms = int(time.time() * 1000)
-        return CachedUserInfo(
-            aid=str(final_status.get("accountId") or final_status.get("id") or ""),
-            uid=str(final_status.get("id") or ""),
-            name=str(final_status.get("name") or ""),
-            organization_id=str(final_status.get("orgId") or ""),
-            organization_name=str(final_status.get("orgName") or ""),
-            avatar_url=str(final_status.get("avatarUrl") or ""),
-            access_token=str(final_status.get("token") or ""),
-            security_oauth_token=str(final_status.get("token") or ""),
-            refresh_token=str(final_status.get("refreshToken") or ""),
-            expire_time=int(final_status.get("expireTime") or 0),
-            refresh_token_expire_time=0,
-            user_source_channel="common",
-            user_type=str(final_status.get("userType") or "personal_standard"),
-            data_policy_agreed=bool(final_status.get("privacyPolicyAgreed")),
-            login_method="browser",
-            email=str(final_status.get("email") or ""),
-            user_tag="",
-            is_data_policy_modifiable=bool(final_status.get("isPrivacyPolicyModifiable")),
-            login_device_id="",
-            login_timestamp=now_ms,
-        )
+    def _build_failure_message(summary: dict[str, Any]) -> str:
+        details: list[str] = []
+        for item in summary.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            attempt = item.get("attempt")
+            error = str(item.get("error") or "").strip()
+            ec = item.get("ec")
+            if error:
+                details.append(f"attempt={attempt}, ec={ec}, error={error}")
+            else:
+                details.append(f"attempt={attempt}, ec={ec}, success=False")
+        if not details:
+            return "xieyi 没有生成可用的设备身份"
+        return "xieyi 没有生成可用的设备身份：\n" + "\n".join(details[-5:])

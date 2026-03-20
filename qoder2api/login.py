@@ -342,9 +342,10 @@ class QoderLoginManager:
                 api_client=self._create_browser_login_client(),
                 on_finished=on_finished,
             )
+            started_snapshot = session.start()
             self._sessions[session.session_id] = session
             self._latest_session_id = session.session_id
-            return session.start()
+            return started_snapshot
 
     def get_session(self, session_id: str) -> BrowserLoginSession:
         with self._lock:

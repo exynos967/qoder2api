@@ -72,6 +72,15 @@ class _RetryingAPI:
         return CachedUserInfo(uid="uid-2", name="second")
 
 
+class _FailingStartAPI:
+    def create_browser_login(self, qoder_home: Path) -> BrowserLoginContext:
+        raise QoderAPIError(
+            "启动登录失败",
+            status_code=500,
+            error_type="configuration_error",
+        )
+
+
 def test_login_manager_rejects_manual_key_input(tmp_path: Path) -> None:
     settings = Settings(
         qoder_home=str(tmp_path / ".qoder"),
@@ -126,6 +135,22 @@ def test_login_session_updates_auth_url_from_progress(tmp_path: Path) -> None:
         time.sleep(0.05)
 
     assert updated.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=second"
+
+
+def test_failed_start_does_not_leave_stale_starting_session(tmp_path: Path) -> None:
+    settings = Settings(
+        qoder_home=str(tmp_path / ".qoder"),
+        workspace=str(tmp_path),
+        browser_login_backend="direct",
+    )
+    manager = QoderLoginManager(settings, api_factory=lambda _settings: _FailingStartAPI())
+    manager._create_browser_login_client = lambda: _FailingStartAPI()  # type: ignore[method-assign]
+
+    with pytest.raises(QoderAPIError) as exc_info:
+        manager.start_browser_login(qoder_home=settings.qoder_home_path)
+
+    assert "启动登录失败" in str(exc_info.value)
+    assert manager.current_session() is None
 
 
 class _FakeLoginManager:

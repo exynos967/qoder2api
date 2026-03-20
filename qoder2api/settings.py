@@ -125,15 +125,24 @@ def discover_web_endpoint(explicit: str | None = None) -> str:
 
 
 def discover_namespaced_login_script(explicit: str | None = None) -> Path:
-    """发现外部 namespaced 登录脚本。"""
+    """发现 xieyi 纯协议设备工作流脚本。"""
     if explicit:
         return Path(explicit).expanduser().resolve()
-    return (
-        Path(__file__).resolve().parents[3]
-        / "machine"
-        / "qoder-machine"
-        / "qoder_namespaced_login.py"
-    ).resolve()
+
+    candidates = [
+        Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py"),
+        (
+            Path(__file__).resolve().parents[3]
+            / "machine"
+            / "qoder-machine"
+            / "xieyi"
+            / "qoder_pure_batch_builder.py"
+        ),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return candidates[0].resolve()
 
 
 class Settings(BaseSettings):
@@ -199,6 +208,9 @@ class Settings(BaseSettings):
 
     @property
     def browser_login_backend_name(self) -> str:
+        candidate = (self.browser_login_backend or "").strip().lower()
+        if candidate in {"direct", "namespaced"}:
+            return candidate
         return _DEFAULT_BROWSER_LOGIN_BACKEND
 
     @property
