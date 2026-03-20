@@ -29,6 +29,7 @@ from .auth_state import inspect_local_auth
 from .catalog import QoderModelInfo, load_qoder_models
 from .login import QoderLoginError, QoderLoginManager
 from .prompting import PreparedPrompt, render_openai_messages
+from .qoder_api import QoderAPIError
 from .qoder_cli import QoderCLIError, QoderCLIInvoker
 from .schemas import (
     AccountLabelUpdateRequest,
@@ -163,6 +164,11 @@ async def handle_qoder_error(_: Request, exc: QoderCLIError) -> JSONResponse:
 
 @app.exception_handler(QoderLoginError)
 async def handle_qoder_login_error(_: Request, exc: QoderLoginError) -> JSONResponse:
+    return _openai_error(str(exc), error_type=exc.error_type, status_code=exc.status_code)
+
+
+@app.exception_handler(QoderAPIError)
+async def handle_qoder_api_error(_: Request, exc: QoderAPIError) -> JSONResponse:
     return _openai_error(str(exc), error_type=exc.error_type, status_code=exc.status_code)
 
 

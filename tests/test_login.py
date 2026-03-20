@@ -156,6 +156,22 @@ def test_failed_start_does_not_leave_stale_starting_session(tmp_path: Path) -> N
     assert manager.current_session() is None
 
 
+def test_qoder_api_error_handler_returns_json() -> None:
+    response = asyncio.run(
+        app_module.handle_qoder_api_error(
+            None,
+            QoderAPIError(
+                "xieyi 纯协议设备构建失败",
+                status_code=502,
+                error_type="api_error",
+            ),
+        )
+    )
+
+    assert response.status_code == 502
+    assert b"xieyi" in response.body
+
+
 class _FakeLoginManager:
     def __init__(self, snapshot: BrowserLoginSnapshot | None) -> None:
         self._snapshot = snapshot
