@@ -368,7 +368,20 @@ async function copyAuthUrl() {
         return;
     }
     try {
-        await navigator.clipboard.writeText(state.authUrl);
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(state.authUrl);
+        } else {
+            const input = $('auth-url');
+            input.removeAttribute('readonly');
+            input.focus();
+            input.select();
+            input.setSelectionRange(0, input.value.length);
+            const success = document.execCommand('copy');
+            input.setAttribute('readonly', 'readonly');
+            if (!success) {
+                throw new Error('当前浏览器不支持剪贴板复制');
+            }
+        }
         showToast('登录链接已复制到剪贴板', 'success');
     } catch (error) {
         showToast(`复制失败: ${error.message}`, 'error');
