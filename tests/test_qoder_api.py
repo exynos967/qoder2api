@@ -24,6 +24,9 @@ def test_poll_device_token_returns_none_on_404(tmp_path: Path) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/deviceToken/poll"
+        assert request.url.params["verifier"]
+        assert request.url.params["challenge_method"] == "S256"
+        assert "code_verifier" not in request.url.params
         return httpx.Response(404, text="not ready")
 
     client = _make_client(settings, handler)

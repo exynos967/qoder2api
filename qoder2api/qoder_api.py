@@ -198,8 +198,8 @@ class QoderAPIClient:
     ) -> DeviceTokenResponse | None:
         params = {
             "nonce": context.nonce,
-            "code_verifier": context.verifier,
-            "code_challenge_method": context.challenge_method,
+            "verifier": context.verifier,
+            "challenge_method": context.challenge_method,
         }
         url = f"{self.settings.openapi_endpoint.rstrip('/')}{_LOGIN_POLL_PATH}"
         headers = self._base_headers(accept="application/json")
