@@ -137,6 +137,7 @@ async def health() -> dict[str, Any]:
         "version": __version__,
         "qoder_home": str(settings.qoder_home_path),
         "workspace": str(settings.workspace_path),
+        "browser_login_backend": settings.browser_login_backend_name,
         "infer_endpoint": settings.infer_endpoint,
         "openapi_endpoint": settings.openapi_endpoint,
         "models": model_count,

@@ -8,8 +8,10 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
+from .auth_state import CachedUserInfo
+from .namespaced_login import NamespacedBrowserLoginClient
 from .auth_state import inspect_local_auth
 from .qoder_api import QoderAPIClient, QoderAPIError
 from .settings import Settings
@@ -37,6 +39,19 @@ def _trim_tail(text: str, *, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[-limit:]
+
+
+class BrowserLoginClient(Protocol):
+    def create_browser_login(self, qoder_home: Path) -> Any: ...
+
+    async def complete_browser_login(
+        self,
+        *,
+        qoder_home: Path,
+        context: Any,
+        progress_callback: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> CachedUserInfo: ...
 
 
 @dataclass(slots=True)
@@ -77,7 +92,7 @@ class BrowserLoginSession:
         *,
         settings: Settings,
         qoder_home: Path,
-        api_client: QoderAPIClient,
+        api_client: BrowserLoginClient,
         on_finished: Callable[[BrowserLoginSnapshot], None] | None = None,
         output_limit: int = _DEFAULT_OUTPUT_LIMIT,
     ) -> None:
@@ -261,6 +276,11 @@ class QoderLoginManager:
         self._sessions: dict[str, BrowserLoginSession] = {}
         self._latest_session_id: str | None = None
 
+    def _create_browser_login_client(self) -> BrowserLoginClient:
+        if self.settings.browser_login_backend_name == "namespaced":
+            return NamespacedBrowserLoginClient(self.settings)
+        return self._api_factory(self.settings)
+
     def _cleanup_expired(self) -> None:
         expired_ids = [
             session_id
@@ -302,7 +322,7 @@ class QoderLoginManager:
             session = BrowserLoginSession(
                 settings=self.settings,
                 qoder_home=qoder_home,
-                api_client=self._api_factory(self.settings),
+                api_client=self._create_browser_login_client(),
                 on_finished=on_finished,
             )
             self._sessions[session.session_id] = session

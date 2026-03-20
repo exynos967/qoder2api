@@ -13,6 +13,7 @@ _DEFAULT_INFER_ENDPOINT = "https://api3.qoder.sh"
 _DEFAULT_OPENAPI_ENDPOINT = "https://openapi.qoder.sh"
 _DEFAULT_CENTER_ENDPOINT = "https://center.qoder.sh"
 _DEFAULT_WEB_ENDPOINT = "https://www.qoder.com"
+_DEFAULT_BROWSER_LOGIN_BACKEND = "direct"
 
 
 def _iter_parent_candidates(start_dir: Path) -> Iterable[Path]:
@@ -123,6 +124,18 @@ def discover_web_endpoint(explicit: str | None = None) -> str:
     return explicit.strip() if explicit else _DEFAULT_WEB_ENDPOINT
 
 
+def discover_namespaced_login_script(explicit: str | None = None) -> Path:
+    """发现外部 namespaced 登录脚本。"""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return (
+        Path(__file__).resolve().parents[3]
+        / "machine"
+        / "qoder-machine"
+        / "qoder_namespaced_login.py"
+    ).resolve()
+
+
 class Settings(BaseSettings):
     """运行配置。"""
 
@@ -138,6 +151,11 @@ class Settings(BaseSettings):
     qoder_center_endpoint: str | None = None
     qoder_web_endpoint: str | None = None
     client_version: str = "0.1.32"
+    browser_login_backend: str = _DEFAULT_BROWSER_LOGIN_BACKEND
+    namespaced_login_script: str | None = None
+    namespaced_login_max_attempts: int = Field(default=3, ge=1, le=20)
+    namespaced_login_timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    namespaced_login_output_root: str | None = None
 
     default_model: str = "auto"
     model_scene: str = "chat"
@@ -178,3 +196,18 @@ class Settings(BaseSettings):
     @property
     def web_endpoint(self) -> str:
         return discover_web_endpoint(self.qoder_web_endpoint)
+
+    @property
+    def browser_login_backend_name(self) -> str:
+        backend = (self.browser_login_backend or _DEFAULT_BROWSER_LOGIN_BACKEND).strip().lower()
+        return backend or _DEFAULT_BROWSER_LOGIN_BACKEND
+
+    @property
+    def namespaced_login_script_path(self) -> Path:
+        return discover_namespaced_login_script(self.namespaced_login_script)
+
+    @property
+    def namespaced_login_output_root_path(self) -> Path | None:
+        if not self.namespaced_login_output_root:
+            return None
+        return Path(self.namespaced_login_output_root).expanduser().resolve()

@@ -7,6 +7,7 @@ import pytest
 from qoder2api import app as app_module
 from qoder2api.accounts import QoderAccount
 from qoder2api.login import BrowserLoginSnapshot, QoderLoginError, QoderLoginManager
+from qoder2api.namespaced_login import NamespacedBrowserLoginClient
 from qoder2api.qoder_api import BrowserLoginContext, QoderAPIError
 from qoder2api.settings import Settings
 from tests.helpers import prepare_qoder_home
@@ -58,6 +59,19 @@ def test_login_manager_rejects_manual_key_input(tmp_path: Path) -> None:
 
     manager.cancel(snapshot.session_id)
     time.sleep(0.1)
+
+
+def test_login_manager_uses_namespaced_backend_when_enabled(tmp_path: Path) -> None:
+    settings = Settings(
+        qoder_home=str(tmp_path / ".qoder"),
+        workspace=str(tmp_path),
+        browser_login_backend="namespaced",
+    )
+    manager = QoderLoginManager(settings, api_factory=lambda _settings: _HoldingAPI())
+
+    client = manager._create_browser_login_client()
+
+    assert isinstance(client, NamespacedBrowserLoginClient)
 
 
 class _FakeLoginManager:

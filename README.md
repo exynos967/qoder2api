@@ -38,6 +38,9 @@
 - 流式输出是对 Qoder 上游事件的保守兼容解析，已做本地单测，但未在当前受限网络环境中做完整在线验证
 - 登录使用 **browser/device flow** 自动轮询，不再需要 PTY/TTY 驱动
 
+> 说明：默认 `direct` 登录后端是 `qoder2api` 自己实现的 browser/device flow，**并不是官方 native Qoder 后端链路**。  
+> 如果要复用外部 `qoder-machine` 中已经验证通过的“新设备 → 远程风控 → 官方登录流”，请启用 `namespaced` 登录后端。
+
 ## 路径发现规则
 
 默认按以下顺序查找 `.qoder`：
@@ -113,8 +116,29 @@ http://127.0.0.1:28001/webui
 | `QODER2API_QODER_CENTER_ENDPOINT` | Center 入口 | `https://center.qoder.sh` |
 | `QODER2API_QODER_WEB_ENDPOINT` | Web 登录页入口 | `https://www.qoder.com` |
 | `QODER2API_CLIENT_VERSION` | 上游鉴权使用的 client version | `0.1.32` |
+| `QODER2API_BROWSER_LOGIN_BACKEND` | 登录后端：`direct` / `namespaced` | `direct` |
+| `QODER2API_NAMESPACED_LOGIN_SCRIPT` | 外部 namespaced 登录脚本路径 | 自动发现 |
+| `QODER2API_NAMESPACED_LOGIN_MAX_ATTEMPTS` | namespaced 登录最大尝试设备数 | `3` |
+| `QODER2API_NAMESPACED_LOGIN_TIMEOUT_SECONDS` | namespaced 登录等待超时（秒） | `300` |
+| `QODER2API_NAMESPACED_LOGIN_OUTPUT_ROOT` | namespaced 登录输出根目录 | 不设置 |
 | `QODER2API_DEFAULT_MODEL` | 默认模型 key | `auto` |
 | `QODER2API_REQUEST_TIMEOUT_SECONDS` | 单次请求超时 | `600` |
+
+## 启用 namespaced 登录后端
+
+如果你已经在相邻仓库准备好了外部工作流，可直接：
+
+```bash
+export QODER2API_BROWSER_LOGIN_BACKEND=namespaced
+python -m qoder2api
+```
+
+此时 WebUI 的“网页登录并入池”会自动改走：
+
+1. 外部 namespaced 新设备构造
+2. 远程风控通过
+3. 官方 Qoder 登录流
+4. 登录完成后把结果写回当前账号池的 `.qoder/.auth/*`
 
 ## 调用示例
 
