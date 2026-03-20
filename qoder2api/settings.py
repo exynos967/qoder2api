@@ -129,16 +129,12 @@ def discover_namespaced_login_script(explicit: str | None = None) -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
 
-    candidates = [
-        Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py"),
-        (
-            Path(__file__).resolve().parents[3]
-            / "machine"
-            / "qoder-machine"
-            / "xieyi"
-            / "qoder_pure_batch_builder.py"
-        ),
-    ]
+    candidates = [Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py")]
+    current_file = Path(__file__).resolve()
+    for base in (current_file.parent, *current_file.parents):
+        candidate = base / "machine" / "qoder-machine" / "xieyi" / "qoder_pure_batch_builder.py"
+        if candidate not in candidates:
+            candidates.append(candidate)
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()

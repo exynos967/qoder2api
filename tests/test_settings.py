@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import qoder2api.settings as settings_module
+
 from qoder2api.settings import (
     Settings,
     discover_infer_endpoint,
@@ -61,3 +63,13 @@ def test_discover_namespaced_login_script_defaults_to_xieyi_builder() -> None:
 
     assert script_path.name == "qoder_pure_batch_builder.py"
     assert "xieyi" in script_path.parts
+
+
+def test_discover_namespaced_login_script_handles_installed_shallow_path(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings_module, "__file__", "/app/qoder2api/settings.py")
+
+    script_path = discover_namespaced_login_script()
+
+    assert script_path == Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py")
