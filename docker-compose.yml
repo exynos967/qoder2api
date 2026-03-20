@@ -1,15 +1,21 @@
 services:
   qoder2api:
-    build: .
+    image: ${QODER2API_IMAGE:-ghcr.io/exynos967/qoder2api:edge}
     container_name: qoder2api
     restart: unless-stopped
+    user: "0:0"
     ports:
       - "28001:28001"
     environment:
+      TZ: Asia/Shanghai
       QODER2API_HOST: 0.0.0.0
       QODER2API_PORT: 28001
       QODER2API_QODER_HOME: /data/.qoder
-      QODER2API_WORKSPACE: /workspace
+      QODER2API_WORKSPACE: /data
     volumes:
-      - ../.qoder:/data/.qoder
-      - ..:/workspace
+      - ./data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

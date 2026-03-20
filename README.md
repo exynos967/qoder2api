@@ -61,7 +61,7 @@
 - `QODER2API_QODER_CENTER_ENDPOINT` → `https://center.qoder.sh`
 - `QODER2API_QODER_WEB_ENDPOINT` → `https://www.qoder.com`
 
-## 启动
+## 本地启动
 
 ```bash
 cd qoder2api
@@ -83,6 +83,50 @@ WebUI：
 http://127.0.0.1:28001/webui
 ```
 
+## Docker 部署
+
+### 启动
+
+```bash
+git clone https://github.com/exynos967/qoder2api.git
+cd qoder2api
+
+docker compose up -d
+```
+
+默认 `docker-compose.yml` 会直接拉取：
+
+```text
+ghcr.io/exynos967/qoder2api:edge
+```
+
+如果你要改成自己的仓库镜像，可覆盖：
+
+```bash
+QODER2API_IMAGE=ghcr.io/exynos967/qoder2api:edge docker compose up -d
+```
+
+### 更新
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+## GitHub Actions 自动构建
+
+仓库内置：
+
+```text
+.github/workflows/docker.yml
+```
+
+触发规则：
+
+- 推送 `main`：发布 `ghcr.io/exynos967/qoder2api:edge`
+- 推送 `v*` tag：发布 semver tag，并自动处理 `latest`
+- 支持手动 `workflow_dispatch`
+
 ## 账号池目录结构
 
 默认会在 `QODER2API_WORKSPACE/.qoder2api/` 下维护账号池：
@@ -102,6 +146,18 @@ http://127.0.0.1:28001/webui
 - 新账号登录时，会先复制基础 `.qoder` 中必要的配置与模型清单
 - 登录成功后，该账号会正式进入池中并可参与轮询
 - 删除账号只会删除其受管目录，不会删宿主机原始 `.qoder`
+
+如果使用默认 Docker Compose，持久化目录是：
+
+```text
+./data -> /data
+```
+
+其中包含：
+
+- `/data/.qoder`：基础 Qoder 登录态与模型缓存
+- `/data/.qoder2api`：账号池、WebUI 相关持久化数据
+- `/data`：默认工作区
 
 ## 环境变量
 
@@ -181,13 +237,6 @@ curl http://127.0.0.1:28001/v1/chat/completions \
       {"role": "user", "content": "介绍一下你自己"}
     ]
   }'
-```
-
-## Docker
-
-```bash
-cd qoder2api
-docker compose up -d --build
 ```
 
 ## 测试
