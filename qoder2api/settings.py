@@ -125,14 +125,14 @@ def discover_web_endpoint(explicit: str | None = None) -> str:
 
 
 def discover_namespaced_login_script(explicit: str | None = None) -> Path:
-    """发现 xieyi 纯协议设备工作流脚本。"""
+    """发现 namespaced 官方登录工作流脚本。"""
     if explicit:
         return Path(explicit).expanduser().resolve()
 
-    candidates = [Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py")]
+    candidates = [Path("/opt/qoder-machine/qoder-machine/qoder_namespaced_login.py")]
     current_file = Path(__file__).resolve()
     for base in (current_file.parent, *current_file.parents):
-        candidate = base / "machine" / "qoder-machine" / "xieyi" / "qoder_pure_batch_builder.py"
+        candidate = base / "machine" / "qoder-machine" / "qoder_namespaced_login.py"
         if candidate not in candidates:
             candidates.append(candidate)
     for candidate in candidates:

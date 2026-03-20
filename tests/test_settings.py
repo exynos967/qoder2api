@@ -58,11 +58,10 @@ def test_browser_login_backend_defaults_to_namespaced_and_respects_override(tmp_
     assert override.browser_login_backend_name == "direct"
 
 
-def test_discover_namespaced_login_script_defaults_to_xieyi_builder() -> None:
+def test_discover_namespaced_login_script_defaults_to_namespaced_login() -> None:
     script_path = discover_namespaced_login_script()
 
-    assert script_path.name == "qoder_pure_batch_builder.py"
-    assert "xieyi" in script_path.parts
+    assert script_path.name == "qoder_namespaced_login.py"
 
 
 def test_discover_namespaced_login_script_handles_installed_shallow_path(
@@ -72,4 +71,4 @@ def test_discover_namespaced_login_script_handles_installed_shallow_path(
 
     script_path = discover_namespaced_login_script()
 
-    assert script_path == Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py")
+    assert script_path == Path("/opt/qoder-machine/qoder-machine/qoder_namespaced_login.py")
