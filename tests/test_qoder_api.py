@@ -120,5 +120,6 @@ def test_complete_browser_login_writes_local_auth(tmp_path: Path) -> None:
     assert info.uid == "user-42"
     assert stored is not None
     assert stored.uid == "user-42"
+    assert stored.login_device_id == context.machine_id
     assert stored.key
     assert any("登录成功" in item for item in progress)

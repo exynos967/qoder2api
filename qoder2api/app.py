@@ -20,6 +20,7 @@ from .accounts import (
     create_pending_managed_account,
     finalize_pending_account,
     get_account,
+    load_device_metadata,
     remove_account,
     update_account_enabled,
     update_account_label,
@@ -219,6 +220,7 @@ def _build_auth_status_payload() -> dict[str, Any]:
 
 def _serialize_account(account: QoderAccount) -> dict[str, Any]:
     auth_state = inspect_local_auth(account.qoder_home_path)
+    device_metadata = load_device_metadata(account.qoder_home_path)
     model_count = (
         len(load_qoder_models(account.qoder_home_path, scene=get_settings().model_scene))
         if auth_state.get("logged_in_hint")
@@ -233,6 +235,12 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
         "auth_type": account.auth_type,
         "qoder_home": str(account.qoder_home_path),
         "machine_id": account.machine_id,
+        "login_device_id": auth_state.get("login_device_id", "") or account.login_device_id,
+        "device_workflow": account.device_workflow or device_metadata.get("device_workflow", ""),
+        "machine_token": account.machine_token or device_metadata.get("machine_token", ""),
+        "machine_type": account.machine_type or device_metadata.get("machine_type", ""),
+        "device_hostname": account.device_hostname or device_metadata.get("device_hostname", ""),
+        "device_mac": account.device_mac or device_metadata.get("device_mac", ""),
         "logged_in_hint": auth_state.get("logged_in_hint", False),
         "has_machine_id": auth_state.get("has_machine_id", False),
         "has_user_file": auth_state.get("has_user_file", False),

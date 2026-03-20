@@ -160,6 +160,7 @@ def inspect_local_auth(qoder_home: Path) -> dict[str, Any]:
         "name": cached.name if cached else "",
         "email": cached.email if cached else "",
         "user_type": cached.user_type if cached else "",
+        "login_device_id": cached.login_device_id if cached else "",
         "auth_error": error_message,
     }
 

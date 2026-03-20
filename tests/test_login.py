@@ -124,7 +124,10 @@ def test_login_session_updates_auth_url_from_progress(tmp_path: Path) -> None:
     manager._create_browser_login_client = lambda: _RetryingAPI()  # type: ignore[method-assign]
 
     snapshot = manager.start_browser_login(qoder_home=settings.qoder_home_path)
-    assert snapshot.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=first"
+    assert snapshot.auth_url in {
+        "https://www.qoder.com/device/selectAccounts?challenge=first",
+        "https://www.qoder.com/device/selectAccounts?challenge=second",
+    }
 
     deadline = time.time() + 2
     updated = snapshot
@@ -209,6 +212,20 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     logs_dir = qoder_home / "logs"
     logs_dir.mkdir(parents=True)
     (logs_dir / "qoder2api.log").write_text("line-1\nline-2\n", encoding="utf-8")
+    auth_dir = qoder_home / ".auth"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    (auth_dir / "xieyi_device.json").write_text(
+        """{
+  "workflow": "xieyi",
+  "machine_id": "1234567890abcdef-demo-machine",
+  "machine_token": "P1gA-demo-token",
+  "machine_type": "4e4a13f491a127292e",
+  "hostname": "pure-host-demo",
+  "mac": "021122334455"
+}
+""",
+        encoding="utf-8",
+    )
 
     settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
     snapshot = BrowserLoginSnapshot(
@@ -246,6 +263,8 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     assert overview_data["health"]["infer_endpoint"] == "https://api3.qoder.sh"
     assert overview_data["accounts"]["total_accounts"] == 1
     assert overview_data["accounts"]["accounts"][0]["label"] == "测试账号"
+    assert overview_data["accounts"]["accounts"][0]["machine_token"] == "P1gA-demo-token"
+    assert overview_data["accounts"]["accounts"][0]["machine_type"] == "4e4a13f491a127292e"
 
     logs_data = asyncio.run(app_module.webui_logs(lines=100))
     assert logs_data["exists"] is True

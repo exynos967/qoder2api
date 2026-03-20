@@ -21,6 +21,7 @@ from .auth_state import (
     ensure_machine_id,
     load_cached_user_info,
     merge_refreshed_tokens,
+    save_machine_id,
     save_cached_user_info,
 )
 from .catalog import QoderModelInfo
@@ -118,8 +119,17 @@ class QoderAPIClient:
     def user_agent(self) -> str:
         return f"qoder2api/{__version__}"
 
-    def create_browser_login(self, qoder_home: Path) -> BrowserLoginContext:
-        machine_id = ensure_machine_id(qoder_home)
+    def create_browser_login(
+        self,
+        qoder_home: Path,
+        *,
+        machine_id: str | None = None,
+    ) -> BrowserLoginContext:
+        resolved_machine_id = (machine_id or "").strip()
+        if resolved_machine_id:
+            resolved_machine_id = save_machine_id(qoder_home, resolved_machine_id)
+        else:
+            resolved_machine_id = ensure_machine_id(qoder_home)
         nonce = uuid.uuid4().hex
         verifier = generate_pkce_verifier()
         challenge = build_pkce_challenge(verifier)
@@ -127,7 +137,7 @@ class QoderAPIClient:
             "challenge_method": "S256",
             "challenge": challenge,
             "nonce": nonce,
-            "machine_id": machine_id,
+            "machine_id": resolved_machine_id,
             "client_id": _DEFAULT_CLIENT_ID,
         }
         auth_url = (
@@ -139,7 +149,7 @@ class QoderAPIClient:
             verifier=verifier,
             challenge=challenge,
             challenge_method="S256",
-            machine_id=machine_id,
+            machine_id=resolved_machine_id,
             client_id=_DEFAULT_CLIENT_ID,
         )
 
@@ -170,6 +180,7 @@ class QoderAPIClient:
 
             userinfo = await self.fetch_userinfo(token_response.token)
             info = self.build_cached_user_info(token_response, userinfo)
+            info.login_device_id = context.machine_id
             ensure_auth_fields(info)
             save_cached_user_info(qoder_home, info)
             self._emit(progress_callback, f"登录成功，当前账号：{info.name or info.uid}")

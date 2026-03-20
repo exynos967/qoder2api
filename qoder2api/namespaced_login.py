@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .auth_state import CachedUserInfo, ensure_auth_dir
+from .auth_state import CachedUserInfo, ensure_auth_dir, save_machine_id
 from .qoder_api import BrowserLoginContext, QoderAPIClient, QoderAPIError
 from .settings import Settings
 
@@ -28,6 +28,7 @@ class XieyiDeviceIdentity:
 class NamespacedBrowserLoginContext:
     auth_url: str
     work_dir: Path
+    machine_id: str
     machine_token: str
     machine_type: str
     direct_context: BrowserLoginContext
@@ -58,17 +59,23 @@ class NamespacedBrowserLoginClient:
             )
 
         identity = self._builder_runner(script_path)
-        direct_context = self.api_client.create_browser_login(qoder_home)
+        selected = identity.selected_result
+        machine_id = self._resolve_machine_id(selected)
+        save_machine_id(qoder_home, machine_id)
+        direct_context = self.api_client.create_browser_login(
+            qoder_home,
+            machine_id=machine_id,
+        )
         self._persist_device_identity(
             qoder_home=qoder_home,
             identity=identity,
             direct_context=direct_context,
         )
         prelude = self._build_prelude_lines(identity, direct_context)
-        selected = identity.selected_result
         return NamespacedBrowserLoginContext(
             auth_url=direct_context.auth_url,
             work_dir=identity.output_dir,
+            machine_id=machine_id,
             machine_token=str(selected.get("machine_token") or ""),
             machine_type=str(selected.get("machine_type") or ""),
             direct_context=direct_context,
@@ -219,6 +226,17 @@ class NamespacedBrowserLoginClient:
             f"DEVICE_MAC={str(selected.get('mac') or '')}",
             f"MACHINE_ID={direct_context.machine_id}",
         ]
+
+    @staticmethod
+    def _resolve_machine_id(selected: dict[str, Any]) -> str:
+        machine_id = str(selected.get("machine_id") or "").strip()
+        if not machine_id:
+            raise QoderAPIError(
+                "xieyi 输出缺少 machine_id",
+                status_code=500,
+                error_type="api_error",
+            )
+        return machine_id
 
     @staticmethod
     def _mask_secret(value: str) -> str:

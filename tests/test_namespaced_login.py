@@ -12,14 +12,20 @@ class _FakeDirectLoginClient:
     def __init__(self) -> None:
         self.completed = False
 
-    def create_browser_login(self, qoder_home: Path) -> BrowserLoginContext:
+    def create_browser_login(
+        self,
+        qoder_home: Path,
+        *,
+        machine_id: str | None = None,
+    ) -> BrowserLoginContext:
+        resolved_machine_id = machine_id or "machine-id-demo"
         return BrowserLoginContext(
             auth_url="https://www.qoder.com/device/selectAccounts?challenge=demo",
             nonce="nonce-demo",
             verifier="verifier-demo",
             challenge="challenge-demo",
             challenge_method="S256",
-            machine_id="machine-id-demo",
+            machine_id=resolved_machine_id,
             client_id="client-demo",
         )
 
@@ -49,6 +55,7 @@ def test_namespaced_client_runs_xieyi_builder_before_browser_login(tmp_path: Pat
     selected = {
         "attempt": 1,
         "success": True,
+        "machine_id": "6bbfd188-a196-4d35-9e7b-4f7d7c4a2d7b",
         "machine_token": "P1gAwKWCng-ZRKiFGEVRejWJ4sw2PxCq8MxDZuT4tkzVuHzHtgXiQA23TFdXXF59",
         "machine_type": "4e4a13f491a127292e",
         "hostname": "pure-host-001-demo",
@@ -77,15 +84,17 @@ def test_namespaced_client_runs_xieyi_builder_before_browser_login(tmp_path: Pat
 
     context = client.create_browser_login(settings.qoder_home_path)
     assert context.work_dir == output_dir
+    assert context.machine_id == selected["machine_id"]
     assert context.machine_type == selected["machine_type"]
     assert context.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=demo"
+    assert (settings.qoder_home_path / ".auth" / "id").read_text(encoding="utf-8") == selected["machine_id"]
 
     metadata = json.loads(
         (settings.qoder_home_path / ".auth" / "xieyi_device.json").read_text(encoding="utf-8")
     )
     assert metadata["workflow"] == "xieyi"
     assert metadata["machine_token"] == selected["machine_token"]
-    assert metadata["machine_id"] == "machine-id-demo"
+    assert metadata["machine_id"] == selected["machine_id"]
 
     progress: list[str] = []
     info = asyncio.run(

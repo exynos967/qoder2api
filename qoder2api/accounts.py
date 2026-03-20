@@ -16,6 +16,7 @@ from .auth_state import inspect_local_auth
 from .settings import Settings
 
 _ACCOUNT_FILE_LOCK = threading.RLock()
+_DEVICE_METADATA_NAME = "xieyi_device.json"
 
 
 def _now_iso() -> str:
@@ -35,6 +36,12 @@ class QoderAccount(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
     machine_id: str = ""
+    login_device_id: str = ""
+    device_workflow: str = ""
+    machine_token: str = ""
+    machine_type: str = ""
+    device_hostname: str = ""
+    device_mac: str = ""
 
     @property
     def qoder_home_path(self) -> Path:
@@ -45,6 +52,26 @@ class AccountPoolConfig(BaseModel):
     """账号池配置。"""
 
     accounts: list[QoderAccount] = Field(default_factory=list)
+
+
+def load_device_metadata(qoder_home: Path) -> dict[str, str]:
+    auth_dir = qoder_home / ".auth"
+    metadata_path = auth_dir / _DEVICE_METADATA_NAME
+    if not metadata_path.is_file():
+        return {}
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "device_workflow": str(payload.get("workflow") or "").strip(),
+        "machine_token": str(payload.get("machine_token") or "").strip(),
+        "machine_type": str(payload.get("machine_type") or "").strip(),
+        "device_hostname": str(payload.get("hostname") or "").strip(),
+        "device_mac": str(payload.get("mac") or "").strip(),
+    }
 
 
 def get_pool_root(settings: Settings) -> Path:
@@ -72,6 +99,12 @@ def _normalize_account(account: QoderAccount) -> QoderAccount:
     account.status = (account.status or "ready").strip() or "ready"
     account.auth_type = (account.auth_type or "qoder-browser").strip() or "qoder-browser"
     account.machine_id = (account.machine_id or "").strip()
+    account.login_device_id = (account.login_device_id or "").strip()
+    account.device_workflow = (account.device_workflow or "").strip()
+    account.machine_token = (account.machine_token or "").strip()
+    account.machine_type = (account.machine_type or "").strip()
+    account.device_hostname = (account.device_hostname or "").strip()
+    account.device_mac = (account.device_mac or "").strip()
 
     if not account.created_at:
         account.created_at = _now_iso()
@@ -137,6 +170,12 @@ def _account_from_auth_state(
 ) -> QoderAccount:
     refreshed = account.model_copy(deep=True)
     refreshed.machine_id = ""
+    refreshed.login_device_id = str(auth_state.get("login_device_id") or "").strip()
+    refreshed.device_workflow = ""
+    refreshed.machine_token = ""
+    refreshed.machine_type = ""
+    refreshed.device_hostname = ""
+    refreshed.device_mac = ""
 
     auth_dir = refreshed.qoder_home_path / ".auth"
     id_path = auth_dir / "id"
@@ -145,6 +184,14 @@ def _account_from_auth_state(
             refreshed.machine_id = id_path.read_text(encoding="utf-8", errors="replace").strip()
         except OSError:
             refreshed.machine_id = ""
+
+    metadata = load_device_metadata(refreshed.qoder_home_path)
+    if metadata:
+        refreshed.device_workflow = metadata.get("device_workflow", "")
+        refreshed.machine_token = metadata.get("machine_token", "")
+        refreshed.machine_type = metadata.get("machine_type", "")
+        refreshed.device_hostname = metadata.get("device_hostname", "")
+        refreshed.device_mac = metadata.get("device_mac", "")
 
     refreshed.updated_at = _now_iso()
     if refreshed.status == "pending_login" and auth_state.get("logged_in_hint"):
