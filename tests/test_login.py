@@ -6,6 +6,7 @@ import pytest
 
 from qoder2api import app as app_module
 from qoder2api.accounts import QoderAccount
+from qoder2api.auth_state import CachedUserInfo
 from qoder2api.login import BrowserLoginSnapshot, QoderLoginError, QoderLoginManager
 from qoder2api.namespaced_login import NamespacedBrowserLoginClient
 from qoder2api.qoder_api import BrowserLoginContext, QoderAPIError
@@ -46,6 +47,31 @@ class _HoldingAPI:
         raise AssertionError("test should cancel before timeout")
 
 
+class _RetryingAPI:
+    def create_browser_login(self, qoder_home: Path) -> BrowserLoginContext:
+        return BrowserLoginContext(
+            auth_url="https://www.qoder.com/device/selectAccounts?challenge=first",
+            nonce="nonce-first",
+            verifier="verifier-first",
+            challenge="challenge-first",
+            challenge_method="S256",
+            machine_id="machine-first",
+            client_id="client-first",
+        )
+
+    async def complete_browser_login(
+        self,
+        *,
+        qoder_home: Path,
+        context: BrowserLoginContext,
+        progress_callback=None,
+        cancel_check=None,
+    ):
+        if progress_callback:
+            progress_callback("LOGIN_URL=https://www.qoder.com/device/selectAccounts?challenge=second")
+        return CachedUserInfo(uid="uid-2", name="second")
+
+
 def test_login_manager_rejects_manual_key_input(tmp_path: Path) -> None:
     settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
     manager = QoderLoginManager(settings, api_factory=lambda _settings: _HoldingAPI())
@@ -72,6 +98,24 @@ def test_login_manager_uses_namespaced_backend_when_enabled(tmp_path: Path) -> N
     client = manager._create_browser_login_client()
 
     assert isinstance(client, NamespacedBrowserLoginClient)
+
+
+def test_login_session_updates_auth_url_from_progress(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    manager = QoderLoginManager(settings, api_factory=lambda _settings: _RetryingAPI())
+
+    snapshot = manager.start_browser_login(qoder_home=settings.qoder_home_path)
+    assert snapshot.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=first"
+
+    deadline = time.time() + 2
+    updated = snapshot
+    while time.time() < deadline:
+        updated = manager.get_session(snapshot.session_id).snapshot()
+        if updated.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=second":
+            break
+        time.sleep(0.05)
+
+    assert updated.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=second"
 
 
 class _FakeLoginManager:

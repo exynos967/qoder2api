@@ -3,7 +3,6 @@ const LOGS_API = '/webui/api/logs';
 const ACCOUNTS_API = '/webui/api/accounts';
 const MODELS_API = '/v1/models';
 const COMPLETIONS_API = '/v1/chat/completions';
-const AUTH_STATUS_API = '/auth/status';
 const AUTH_START_API = '/auth/browser/start';
 
 const state = {
@@ -106,20 +105,25 @@ function switchPage(page) {
     $('page-title').textContent = activeNav ? activeNav.textContent : 'qoder2api';
 }
 
-function updateSessionControls(session) {
-    const active = Boolean(session && !session.done);
-    const canInput = Boolean(active && session.input_enabled);
-    $('cancel-login-btn').disabled = !active;
-    $('login-up-btn').disabled = !canInput;
-    $('login-down-btn').disabled = !canInput;
-    $('login-enter-btn').disabled = !canInput;
-    $('login-escape-btn').disabled = !canInput;
-}
-
 function renderLoginState(session, auth = {}) {
+    const previousAuthUrl = state.authUrl;
     state.sessionId = session?.session_id || null;
     state.sessionDone = !(session && !session.done);
     state.authUrl = session?.auth_url || '';
+
+    if (
+        state.popup &&
+        !state.popup.closed &&
+        state.authUrl &&
+        previousAuthUrl &&
+        previousAuthUrl !== state.authUrl
+    ) {
+        try {
+            state.popup.location.replace(state.authUrl);
+        } catch (error) {
+            console.warn('failed to refresh login popup url', error);
+        }
+    }
 
     $('auth-url').value = state.authUrl;
     $('open-auth-url-btn').disabled = !state.authUrl;
@@ -132,8 +136,6 @@ function renderLoginState(session, auth = {}) {
     } else {
         $('login-terminal-output').textContent = '尚未启动登录会话。';
     }
-
-    updateSessionControls(session);
 }
 
 function renderOverview(data) {
@@ -340,84 +342,24 @@ function startSessionPolling() {
 async function startBrowserLogin() {
     $('start-login-btn').disabled = true;
     try {
-        const label = $('new-account-label').value.trim();
         const data = await apiRequest(AUTH_START_API, {
             method: 'POST',
-            body: JSON.stringify({ label }),
+            body: '{}',
         });
         renderOverview(data);
         await loadAccounts();
+        state.popup = null;
 
         const session = data.session || null;
-        if (session?.auth_url) {
-            state.popup = window.open(
-                session.auth_url,
-                'qoder-browser-login',
-                'width=780,height=840,toolbar=no,menubar=no'
-            );
-        }
-
         if (session && !session.done) {
             startSessionPolling();
         }
 
-        showToast(session?.message || '已启动登录流程', 'success');
+        showToast(session?.auth_url ? '已生成登录链接，请手动打开。' : (session?.message || '已启动登录流程'), 'success');
     } catch (error) {
         showToast(error.message, 'error');
     } finally {
         $('start-login-btn').disabled = false;
-    }
-}
-
-async function refreshAuthStatus() {
-    try {
-        const data = await apiRequest(AUTH_STATUS_API);
-        renderLoginState(data.session, data.auth);
-        await Promise.all([loadOverview(), loadAccounts()]);
-        if (data.session && !data.session.done) {
-            startSessionPolling();
-        }
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
-async function sendLoginKey(key) {
-    if (!state.sessionId) {
-        showToast('当前没有活跃登录会话', 'warning');
-        return;
-    }
-
-    try {
-        const session = await apiRequest(`/auth/browser/sessions/${state.sessionId}/input`, {
-            method: 'POST',
-            body: JSON.stringify({ key }),
-        });
-        renderLoginState(session);
-        if (!session.done) {
-            startSessionPolling();
-        }
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
-async function cancelLoginSession() {
-    if (!state.sessionId) {
-        return;
-    }
-
-    try {
-        const session = await apiRequest(`/auth/browser/sessions/${state.sessionId}/cancel`, {
-            method: 'POST',
-            body: '{}',
-        });
-        renderLoginState(session);
-        stopSessionPolling();
-        await Promise.all([loadOverview(), loadAccounts()]);
-        showToast(session.message || '会话已取消', 'info');
-    } catch (error) {
-        showToast(error.message, 'error');
     }
 }
 
@@ -597,13 +539,7 @@ function bindEvents() {
     $('accounts-refresh-btn').addEventListener('click', () => loadAccounts().catch((error) => showToast(error.message, 'error')));
     $('models-refresh-btn').addEventListener('click', () => loadModels().catch((error) => showToast(error.message, 'error')));
     $('logs-refresh-btn').addEventListener('click', () => loadLogs().catch((error) => showToast(error.message, 'error')));
-    $('refresh-login-btn').addEventListener('click', refreshAuthStatus);
     $('start-login-btn').addEventListener('click', startBrowserLogin);
-    $('cancel-login-btn').addEventListener('click', cancelLoginSession);
-    $('login-up-btn').addEventListener('click', () => sendLoginKey('up'));
-    $('login-down-btn').addEventListener('click', () => sendLoginKey('down'));
-    $('login-enter-btn').addEventListener('click', () => sendLoginKey('enter'));
-    $('login-escape-btn').addEventListener('click', () => sendLoginKey('escape'));
     $('open-auth-url-btn').addEventListener('click', openAuthUrl);
     $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);
     $('playground-form').addEventListener('submit', submitPlayground);

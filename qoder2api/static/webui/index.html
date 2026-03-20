@@ -121,18 +121,12 @@
                         </div>
                         <div class="card-body">
                             <p class="hint">形态参考 iflow2api，但上游账号从 iFlow 换成了 Qoder。每个账号都对应一个独立的受管 <code>.qoder</code> 目录，登录、请求和日志相互隔离。</p>
-                            <div class="form-group">
-                                <label for="new-account-label">新账号标签</label>
-                                <input type="text" id="new-account-label" placeholder="可选，例如：主力号 / 备用号 / A 组账号">
-                            </div>
                             <div class="form-row">
-                                <button id="start-login-btn" class="btn btn-primary">网页登录并入池</button>
-                                <button id="refresh-login-btn" class="btn btn-secondary">刷新登录会话</button>
-                                <button id="cancel-login-btn" class="btn btn-danger" disabled>取消当前会话</button>
+                                <button id="start-login-btn" class="btn btn-primary">Oauth登录</button>
                             </div>
                             <div class="form-group" style="margin-top: 16px;">
                                 <label>官方登录链接</label>
-                                <input type="text" id="auth-url" readonly placeholder="启动登录后自动出现">
+                                <input type="text" id="auth-url" readonly placeholder="启动登录后手动打开">
                             </div>
                             <div class="form-row">
                                 <button id="open-auth-url-btn" class="btn btn-secondary" disabled>打开登录页</button>
@@ -158,27 +152,6 @@
                         </div>
                     </div>
 
-                    <div class="card">
-                        <div class="card-header"><span>网页登录说明</span></div>
-                        <div class="card-body">
-                            <p class="hint">当前为独立 device/browser flow：打开官方链接后，在浏览器完成授权即可，后台会自动轮询结果，无需手动驱动终端按键。</p>
-                            <div class="actions-bar wrap-actions">
-                                <button id="login-up-btn" class="btn btn-secondary" disabled>无需按键</button>
-                                <button id="login-down-btn" class="btn btn-secondary" disabled>自动轮询</button>
-                                <button id="login-enter-btn" class="btn btn-warning" disabled>浏览器完成授权</button>
-                                <button id="login-escape-btn" class="btn btn-secondary" disabled>后台自动收敛</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card full-width">
-                        <div class="card-header"><span>网页登录状态</span></div>
-                        <div class="card-body">
-                            <div class="log-container terminal-container">
-                                <pre id="login-terminal-output">尚未启动登录会话。</pre>
-                            </div>
-                        </div>
-                    </div>
                 </section>
 
                 <section id="models-section" class="section">
@@ -268,6 +241,15 @@
                             <p id="logs-meta" class="hint">日志加载中...</p>
                             <div class="log-container terminal-container">
                                 <pre id="logs-output">加载中...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card full-width">
+                        <div class="card-header"><span>网页登录状态</span></div>
+                        <div class="card-body">
+                            <div class="log-container terminal-container">
+                                <pre id="login-terminal-output">尚未启动登录会话。</pre>
                             </div>
                         </div>
                     </div>

@@ -18,6 +18,8 @@ from .settings import Settings
 
 _DEFAULT_OUTPUT_LIMIT = 16_000
 _SESSION_TTL_SECONDS = 15 * 60
+_LOGIN_URL_PREFIX = "LOGIN_URL="
+_LOGIN_ADDRESS_PREFIX = "登录地址："
 
 
 class QoderLoginError(RuntimeError):
@@ -217,7 +219,22 @@ class BrowserLoginSession:
             self._notify_finished_once()
 
     def _append_progress(self, message: str) -> None:
-        self._update_snapshot(terminal_output=self._append_output_line(message))
+        auth_url = self._extract_progress_auth_url(message)
+        self._update_snapshot(
+            auth_url=auth_url if auth_url else None,
+            terminal_output=self._append_output_line(message),
+        )
+
+    @staticmethod
+    def _extract_progress_auth_url(message: str) -> str | None:
+        stripped = message.strip()
+        if stripped.startswith(_LOGIN_URL_PREFIX):
+            candidate = stripped.removeprefix(_LOGIN_URL_PREFIX).strip()
+            return candidate or None
+        if stripped.startswith(_LOGIN_ADDRESS_PREFIX):
+            candidate = stripped.removeprefix(_LOGIN_ADDRESS_PREFIX).strip()
+            return candidate or None
+        return None
 
     def _append_output_line(self, line: str) -> str:
         current = self.snapshot().terminal_output
