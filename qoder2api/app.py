@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from functools import lru_cache
+from logging.config import dictConfig
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
@@ -58,6 +60,52 @@ def _sse_payload(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _build_log_config(settings: Settings) -> dict[str, Any]:
+    log_path = settings.app_log_path
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            },
+            "access": {
+                "format": '%(asctime)s [%(levelname)s] %(name)s: %(client_addr)s - "%(request_line)s" %(status_code)s',
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "formatter": "default",
+                "stream": "ext://sys.stdout",
+            },
+            "file": {
+                "class": "logging.FileHandler",
+                "formatter": "default",
+                "filename": str(log_path),
+                "encoding": "utf-8",
+            },
+            "access_file": {
+                "class": "logging.FileHandler",
+                "formatter": "access",
+                "filename": str(log_path),
+                "encoding": "utf-8",
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["console", "file"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"handlers": ["console", "file"], "level": "INFO", "propagate": False},
+            "uvicorn.access": {
+                "handlers": ["console", "access_file"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "qoder2api": {"handlers": ["console", "file"], "level": "INFO", "propagate": False},
+        },
+        "root": {"handlers": ["console", "file"], "level": "INFO"},
+    }
+
+
 def _model_to_openai_item(model: QoderModelInfo) -> dict[str, Any]:
     return {
         "id": model.id,
@@ -100,6 +148,7 @@ app = FastAPI(
     description="独立 Qoder OpenAI 兼容代理。",
     version=__version__,
 )
+logger = logging.getLogger("qoder2api")
 
 _webui_static_dir = get_webui_static_dir()
 if _webui_static_dir.exists():
@@ -225,10 +274,7 @@ async def webui_overview() -> dict[str, Any]:
 @app.get("/webui/api/logs")
 async def webui_logs(lines: int = Query(default=200, ge=1, le=2000)) -> dict[str, Any]:
     settings = get_settings()
-    qoder2api_log = settings.qoder_home_path / "logs" / "qoder2api.log"
-    qodercli_log = settings.qoder_home_path / "logs" / "qodercli.log"
-    log_path = qoder2api_log if qoder2api_log.is_file() else qodercli_log
-    return build_logs_payload(log_path, lines=lines)
+    return build_logs_payload(settings.app_log_path, lines=lines)
 
 
 @app.get("/auth/status")
@@ -518,9 +564,19 @@ def main() -> None:
     import uvicorn
 
     settings = get_settings()
+    log_config = _build_log_config(settings)
+    dictConfig(log_config)
+    logger.info(
+        "starting qoder2api server on %s:%s, browser_login_backend=%s, log_path=%s",
+        settings.host,
+        settings.port,
+        settings.browser_login_backend_name,
+        settings.app_log_path,
+    )
     uvicorn.run(
         app,
         host=settings.host,
         port=settings.port,
         reload=False,
+        log_config=log_config,
     )

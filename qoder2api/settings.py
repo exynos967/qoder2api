@@ -13,7 +13,7 @@ _DEFAULT_INFER_ENDPOINT = "https://api3.qoder.sh"
 _DEFAULT_OPENAPI_ENDPOINT = "https://openapi.qoder.sh"
 _DEFAULT_CENTER_ENDPOINT = "https://center.qoder.sh"
 _DEFAULT_WEB_ENDPOINT = "https://www.qoder.com"
-_DEFAULT_BROWSER_LOGIN_BACKEND = "direct"
+_DEFAULT_BROWSER_LOGIN_BACKEND = "namespaced"
 
 
 def _iter_parent_candidates(start_dir: Path) -> Iterable[Path]:
@@ -199,8 +199,17 @@ class Settings(BaseSettings):
 
     @property
     def browser_login_backend_name(self) -> str:
-        backend = (self.browser_login_backend or _DEFAULT_BROWSER_LOGIN_BACKEND).strip().lower()
-        return backend or _DEFAULT_BROWSER_LOGIN_BACKEND
+        return _DEFAULT_BROWSER_LOGIN_BACKEND
+
+    @property
+    def logs_dir_path(self) -> Path:
+        path = self.qoder_home_path / "logs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def app_log_path(self) -> Path:
+        return self.logs_dir_path / "qoder2api.log"
 
     @property
     def namespaced_login_script_path(self) -> Path:

@@ -73,8 +73,13 @@ class _RetryingAPI:
 
 
 def test_login_manager_rejects_manual_key_input(tmp_path: Path) -> None:
-    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    settings = Settings(
+        qoder_home=str(tmp_path / ".qoder"),
+        workspace=str(tmp_path),
+        browser_login_backend="direct",
+    )
     manager = QoderLoginManager(settings, api_factory=lambda _settings: _HoldingAPI())
+    manager._create_browser_login_client = lambda: _HoldingAPI()  # type: ignore[method-assign]
 
     snapshot = manager.start_browser_login(qoder_home=settings.qoder_home_path)
 
@@ -101,8 +106,13 @@ def test_login_manager_uses_namespaced_backend_when_enabled(tmp_path: Path) -> N
 
 
 def test_login_session_updates_auth_url_from_progress(tmp_path: Path) -> None:
-    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    settings = Settings(
+        qoder_home=str(tmp_path / ".qoder"),
+        workspace=str(tmp_path),
+        browser_login_backend="direct",
+    )
     manager = QoderLoginManager(settings, api_factory=lambda _settings: _RetryingAPI())
+    manager._create_browser_login_client = lambda: _RetryingAPI()  # type: ignore[method-assign]
 
     snapshot = manager.start_browser_login(qoder_home=settings.qoder_home_path)
     assert snapshot.auth_url == "https://www.qoder.com/device/selectAccounts?challenge=first"
