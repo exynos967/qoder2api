@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -230,13 +231,7 @@ class NamespacedBrowserLoginClient:
     @staticmethod
     def _resolve_machine_id(selected: dict[str, Any]) -> str:
         machine_id = str(selected.get("machine_id") or "").strip()
-        if not machine_id:
-            raise QoderAPIError(
-                "xieyi 输出缺少 machine_id",
-                status_code=500,
-                error_type="api_error",
-            )
-        return machine_id
+        return machine_id or str(uuid.uuid4())
 
     @staticmethod
     def _mask_secret(value: str) -> str:
