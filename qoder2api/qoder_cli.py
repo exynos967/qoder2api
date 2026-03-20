@@ -1,0 +1,186 @@
+"""Qoder 运行时调用器。保留历史命名，但内部已改为独立 HTTP 实现。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import AsyncIterator
+
+from .accounts import QoderAccount, QoderAccountPool
+from .catalog import QoderModelInfo, load_qoder_models, resolve_model_name
+from .qoder_api import QoderAPIClient, QoderAPIError
+from .settings import Settings
+from .streaming import ParsedStreamEvent
+
+
+class QoderCLIError(RuntimeError):
+    """统一给 API 层抛出的上游错误。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        error_type: str = "api_error",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_type = error_type
+
+
+@dataclass(slots=True)
+class QoderExecutionContext:
+    """单次执行上下文。"""
+
+    account_id: str
+    account_label: str
+    qoder_home: Path
+    workspace: Path
+    models: list[QoderModelInfo]
+
+
+class QoderCLIInvoker:
+    """兼容原接口的独立调用器。"""
+
+    def __init__(
+        self,
+        settings: Settings,
+        account_pool: QoderAccountPool | None = None,
+        api_client: QoderAPIClient | None = None,
+    ) -> None:
+        self.settings = settings
+        self.account_pool = account_pool
+        self.api_client = api_client or QoderAPIClient(settings)
+
+    @property
+    def qoder_home(self) -> Path:
+        return self.settings.qoder_home_path
+
+    @property
+    def workspace(self) -> Path:
+        return self.settings.workspace_path
+
+    def _load_models(self, qoder_home: Path) -> list[QoderModelInfo]:
+        return load_qoder_models(qoder_home, scene=self.settings.model_scene)
+
+    def _default_context(self) -> QoderExecutionContext:
+        return QoderExecutionContext(
+            account_id="default",
+            account_label="默认账号",
+            qoder_home=self.qoder_home,
+            workspace=self.workspace,
+            models=self._load_models(self.qoder_home),
+        )
+
+    def _context_from_account(self, account: QoderAccount) -> QoderExecutionContext:
+        return QoderExecutionContext(
+            account_id=account.id,
+            account_label=account.label,
+            qoder_home=account.qoder_home_path,
+            workspace=self.workspace,
+            models=self._load_models(account.qoder_home_path),
+        )
+
+    def select_context(self, preferred_account_id: str | None = None) -> QoderExecutionContext:
+        if self.account_pool is None:
+            return self._default_context()
+
+        accounts = self.account_pool.list_accounts()
+        account = self.account_pool.pick_account(preferred_account_id=preferred_account_id)
+        if account is None and (accounts or self.account_pool.is_configured()):
+            raise QoderCLIError(
+                "账号池中没有可用的已启用账号，请先在 WebUI 中登录并启用账号",
+                status_code=401,
+                error_type="authentication_error",
+            )
+        if account is None:
+            return self._default_context()
+        return self._context_from_account(account)
+
+    def list_models(self, preferred_account_id: str | None = None) -> list[QoderModelInfo]:
+        return list(self.select_context(preferred_account_id).models)
+
+    def resolve_model(self, requested_model: str | None, models: list[QoderModelInfo]) -> str:
+        return resolve_model_name(requested_model, models, self.settings.default_model)
+
+    def _resolve_model_info(
+        self,
+        context: QoderExecutionContext,
+        requested_model: str | None,
+    ) -> tuple[QoderModelInfo, str]:
+        resolved_model = self.resolve_model(requested_model, context.models)
+        for model in context.models:
+            if model.id == resolved_model:
+                return model, resolved_model
+        raise QoderCLIError(
+            f"找不到模型配置: {resolved_model}",
+            status_code=400,
+            error_type="invalid_request_error",
+        )
+
+    @staticmethod
+    def _ensure_no_attachments(attachments: list[Path]) -> None:
+        if attachments:
+            raise QoderCLIError(
+                "独立模式暂不支持本地图片附件上传",
+                status_code=400,
+                error_type="invalid_request_error",
+            )
+
+    @staticmethod
+    def _raise_api_error(exc: QoderAPIError) -> None:
+        raise QoderCLIError(
+            str(exc),
+            status_code=exc.status_code,
+            error_type=exc.error_type,
+        ) from exc
+
+    async def run_text(
+        self,
+        *,
+        prompt: str,
+        attachments: list[Path],
+        model: str | None,
+        max_tokens: int | None,
+        preferred_account_id: str | None = None,
+    ) -> tuple[str, str]:
+        self._ensure_no_attachments(attachments)
+        context = self.select_context(preferred_account_id=preferred_account_id)
+        model_info, resolved_model = self._resolve_model_info(context, model)
+        try:
+            output_text = await self.api_client.run_text(
+                qoder_home=context.qoder_home,
+                prompt=prompt,
+                model_info=model_info,
+                max_tokens=max_tokens,
+            )
+        except QoderAPIError as exc:
+            self._raise_api_error(exc)
+        return output_text, resolved_model
+
+    async def stream_events(
+        self,
+        *,
+        prompt: str,
+        attachments: list[Path],
+        model: str | None,
+        max_tokens: int | None,
+        preferred_account_id: str | None = None,
+    ) -> tuple[AsyncIterator[ParsedStreamEvent], str]:
+        self._ensure_no_attachments(attachments)
+        context = self.select_context(preferred_account_id=preferred_account_id)
+        model_info, resolved_model = self._resolve_model_info(context, model)
+
+        async def _iterator() -> AsyncIterator[ParsedStreamEvent]:
+            try:
+                async for event in self.api_client.stream_chat(
+                    qoder_home=context.qoder_home,
+                    prompt=prompt,
+                    model_info=model_info,
+                    max_tokens=max_tokens,
+                ):
+                    yield event
+            except QoderAPIError as exc:
+                self._raise_api_error(exc)
+
+        return _iterator(), resolved_model
