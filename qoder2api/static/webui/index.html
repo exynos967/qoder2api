@@ -12,244 +12,477 @@
     <div id="main-page" class="page active">
         <aside class="sidebar">
             <div class="sidebar-header">
-                <h2>qoder2api</h2>
+                <div class="brand-lockup">
+                    <div class="brand-mark" aria-hidden="true">
+                        <span class="brand-mark-core"></span>
+                        <span class="brand-mark-ring brand-mark-ring-a"></span>
+                        <span class="brand-mark-ring brand-mark-ring-b"></span>
+                    </div>
+                    <div class="brand-heading">
+                        <div class="brand-kicker">Qoder Account Pool</div>
+                        <div class="brand-title-row">
+                            <h2>qoder2api</h2>
+                            <span class="brand-badge">POOL</span>
+                        </div>
+                        <p class="brand-note">多账号登录态、模型能力与试用资格统一编排。</p>
+                    </div>
+                </div>
             </div>
+
             <nav class="sidebar-nav">
                 <a href="#" class="nav-item active" data-page="dashboard">
-                    <span class="icon">概</span>
-                    <span>仪表盘</span>
+                    <span class="icon-shell" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M4 19h16" />
+                            <path d="M7 15v-5" />
+                            <path d="M12 15V9" />
+                            <path d="M17 15V6" />
+                        </svg>
+                        <span class="icon-index">01</span>
+                    </span>
+                    <span class="nav-copy">
+                        <strong>仪表盘</strong>
+                        <small>运行健康与调度总览</small>
+                    </span>
                 </a>
                 <a href="#" class="nav-item" data-page="accounts">
-                    <span class="icon">池</span>
-                    <span>账号池</span>
+                    <span class="icon-shell" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M16 21v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1" />
+                            <circle cx="9.5" cy="8" r="3" />
+                            <path d="M20 21v-1a3 3 0 0 0-2.4-2.93" />
+                            <path d="M15.5 4.9a3 3 0 0 1 0 5.82" />
+                        </svg>
+                        <span class="icon-index">02</span>
+                    </span>
+                    <span class="nav-copy">
+                        <strong>账号池</strong>
+                        <small>登录、检测与轮询管理</small>
+                    </span>
                 </a>
                 <a href="#" class="nav-item" data-page="models">
-                    <span class="icon">模</span>
-                    <span>模型列表</span>
+                    <span class="icon-shell" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M12 3 4 7l8 4 8-4-8-4Z" />
+                            <path d="M4 12l8 4 8-4" />
+                            <path d="M4 17l8 4 8-4" />
+                        </svg>
+                        <span class="icon-index">03</span>
+                    </span>
+                    <span class="nav-copy">
+                        <strong>模型与设置</strong>
+                        <small>模型暴露与运行参数</small>
+                    </span>
                 </a>
                 <a href="#" class="nav-item" data-page="playground">
-                    <span class="icon">测</span>
-                    <span>调试面板</span>
+                    <span class="icon-shell" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M4 5h16v14H4z" />
+                            <path d="m8 10 3 2-3 2" />
+                            <path d="M13 16h3" />
+                        </svg>
+                        <span class="icon-index">04</span>
+                    </span>
+                    <span class="nav-copy">
+                        <strong>调试面板</strong>
+                        <small>兼容接口与输出验证</small>
+                    </span>
                 </a>
                 <a href="#" class="nav-item" data-page="logs">
-                    <span class="icon">志</span>
-                    <span>日志</span>
+                    <span class="icon-shell" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M8 6h12" />
+                            <path d="M8 12h12" />
+                            <path d="M8 18h12" />
+                            <path d="M4 6h.01" />
+                            <path d="M4 12h.01" />
+                            <path d="M4 18h.01" />
+                        </svg>
+                        <span class="icon-index">05</span>
+                    </span>
+                    <span class="nav-copy">
+                        <strong>日志追踪</strong>
+                        <small>服务日志与网页登录输出</small>
+                    </span>
                 </a>
             </nav>
+
             <div class="sidebar-footer">
-                <a class="btn btn-text btn-block" href="/docs" target="_blank" rel="noopener noreferrer">OpenAPI 文档</a>
+                <div class="sidebar-footer-card">
+                    <div class="sidebar-footer-kicker">OpenAPI</div>
+                    <p>查看兼容接口、模型能力与联调入口。</p>
+                    <a class="btn btn-text btn-block" href="/docs" target="_blank" rel="noopener noreferrer"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M6 4h9l3 3v13H6z"/><path d="M15 4v4h4"/><path d="M9 12h6"/><path d="M9 16h6"/></svg></span><span>打开文档</span></a>
+                </div>
             </div>
         </aside>
 
         <main class="main-content">
             <header class="topbar">
                 <div class="topbar-left">
+                    <div class="page-kicker">Operations Console</div>
                     <h1 id="page-title">仪表盘</h1>
+                    <p id="page-subtitle" class="page-subtitle">账号状态、轮询调度与运行健康总览</p>
                 </div>
                 <div class="topbar-right">
-                    <span id="topbar-summary">独立 Qoder 账号池</span>
+                    <div class="topbar-brand-chip">
+                        <span class="topbar-brand-mark" aria-hidden="true"></span>
+                        <span class="topbar-brand-copy">
+                            <strong>Qoder Pool</strong>
+                            <small>Routing Layer</small>
+                        </span>
+                    </div>
+                    <div class="topbar-summary-wrap">
+                        <span class="summary-dot"></span>
+                        <div id="topbar-summary" class="topbar-pill">独立 Qoder 账号池</div>
+                    </div>
                 </div>
             </header>
 
             <div class="content">
                 <section id="dashboard-section" class="section active">
-                    <div class="status-cards">
-                        <div class="card">
-                            <div class="card-header"><span>登录态</span></div>
-                            <div class="card-body">
-                                <div id="auth-status-badge" class="status-badge starting">检查中</div>
-                                <p id="auth-status-text" class="hint"></p>
+                    <div class="hero-panel">
+                        <div class="hero-copy">
+                            <div class="hero-eyebrow">Qoder Trial Operations</div>
+                            <h2 class="hero-title">统一管理多账号登录态、模型暴露与上游调度</h2>
+                            <p class="hero-text">默认从已启用账号中轮询分发请求，登录态、缓存与设备信息彼此隔离，适合试用账号池与代理服务一体化运营。</p>
+                            <div class="hero-meta">
+                                <span class="meta-pill">Round Robin</span>
+                                <span id="dashboard-concurrency-pill" class="meta-pill">并发 --</span>
+                                <span id="dashboard-proxy-pill" class="meta-pill">代理未配置</span>
+                            </div>
+                            <div class="hero-status-ribbon">
+                                <div class="status-ribbon-item">
+                                    <span>Routing</span>
+                                    <strong>Round Robin</strong>
+                                </div>
+                                <div class="status-ribbon-item">
+                                    <span>Concurrency</span>
+                                    <strong id="dashboard-monitor-concurrency">--</strong>
+                                </div>
+                                <div class="status-ribbon-item">
+                                    <span>Proxy</span>
+                                    <strong id="dashboard-monitor-proxy">未配置</strong>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="card">
-                            <div class="card-header"><span>当前登录会话</span></div>
-                            <div class="card-body">
-                                <div id="session-status-badge" class="status-badge stopped">空闲</div>
-                                <p id="session-status-text" class="hint"></p>
+                        <div class="hero-side">
+                            <div class="monitor-panel">
+                                <div class="monitor-panel-header">
+                                    <div class="monitor-title-wrap">
+                                        <span class="monitor-live-dot"></span>
+                                        <span class="monitor-panel-title">Pool Monitor</span>
+                                    </div>
+                                    <span id="dashboard-monitor-status" class="monitor-status-text">Awaiting Data</span>
+                                </div>
+                                <div class="monitor-wave" aria-hidden="true">
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                </div>
+                                <div class="monitor-grid">
+                                    <div class="monitor-cell">
+                                        <span>Accounts</span>
+                                        <strong id="dashboard-monitor-accounts">0 / 0</strong>
+                                    </div>
+                                    <div class="monitor-cell">
+                                        <span>Active</span>
+                                        <strong id="dashboard-monitor-active">0 req</strong>
+                                    </div>
+                                    <div class="monitor-cell">
+                                        <span>Models</span>
+                                        <strong id="dashboard-monitor-models">0 online</strong>
+                                    </div>
+                                    <div class="monitor-cell">
+                                        <span>llmapi</span>
+                                        <strong id="dashboard-monitor-llmapi">未配置</strong>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                            <div class="metrics-grid">
+                                <article class="metric-tile">
+                                    <span class="metric-label">登录态</span>
+                                    <div id="auth-status-badge" class="status-badge starting">检查中</div>
+                                    <p id="auth-status-text" class="hint">等待状态刷新</p>
+                                </article>
+                                <article class="metric-tile">
+                                    <span class="metric-label">启用账号</span>
+                                    <div id="dashboard-enabled-count" class="big-number">0</div>
+                                    <p class="hint">总数 <span id="dashboard-accounts-total">0</span></p>
+                                </article>
+                                <article class="metric-tile">
+                                    <span class="metric-label">模型数量</span>
+                                    <div id="models-count" class="big-number">0</div>
+                                    <p class="hint">当前开放模型</p>
+                                </article>
+                                <article class="metric-tile">
+                                    <span class="metric-label">运行中请求</span>
+                                    <div id="dashboard-active-requests" class="big-number">0</div>
+                                    <p class="hint">并发上限 <span id="dashboard-concurrency-limit">--</span></p>
+                                </article>
+                            </div>
 
-                        <div class="card">
-                            <div class="card-header"><span>模型数量</span></div>
-                            <div class="card-body">
-                                <div id="models-count" class="big-number">0</div>
+                            <div class="ops-note-card">
+                                <div class="ops-note-kicker">Workflow</div>
+                                <ul class="ops-note-list">
+                                    <li>账号池默认在已启用账号之间轮询。</li>
+                                    <li>每个账号对应独立的 <code>.qoder</code> 工作目录。</li>
+                                    <li>适合统一代理多账号试用与上游 API 出口。</li>
+                                </ul>
                             </div>
                         </div>
                     </div>
 
-                    <div class="card full-width">
-                        <div class="card-header">
-                            <span>运行信息</span>
-                            <div class="header-actions">
-                                <button id="dashboard-refresh-btn" class="btn btn-secondary btn-sm">刷新</button>
+                    <div class="overview-grid">
+                        <div class="card full-width">
+                            <div class="card-header">
+                                <div>
+                                    <span>运行信息</span>
+                                    <p class="section-intro">服务健康、上游入口与版本信息。</p>
+                                </div>
+                                <div class="header-actions">
+                                    <button id="dashboard-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <table class="info-table">
+                                    <tr><td>状态</td><td id="health-status">--</td></tr>
+                                    <tr><td>版本</td><td id="health-version">--</td></tr>
+                                    <tr><td>Infer Endpoint</td><td id="health-infer-endpoint" class="mono-cell">--</td></tr>
+                                    <tr><td>OpenAPI Endpoint</td><td id="health-openapi-endpoint" class="mono-cell">--</td></tr>
+                                </table>
                             </div>
                         </div>
-                        <div class="card-body">
-                            <table class="info-table">
-                                <tr><td>状态</td><td id="health-status">--</td></tr>
-                                <tr><td>版本</td><td id="health-version">--</td></tr>
-                                <tr><td>Qoder Home</td><td id="health-qoder-home" class="mono-cell">--</td></tr>
-                                <tr><td>Workspace</td><td id="health-workspace" class="mono-cell">--</td></tr>
-                                <tr><td>Infer Endpoint</td><td id="health-infer-endpoint" class="mono-cell">--</td></tr>
-                                <tr><td>OpenAPI Endpoint</td><td id="health-openapi-endpoint" class="mono-cell">--</td></tr>
-                                <tr><td>会话 ID</td><td id="health-session-id" class="mono-cell">--</td></tr>
-                            </table>
-                        </div>
-                    </div>
 
-                    <div class="card full-width">
-                        <div class="card-header"><span>API 快速入口</span></div>
-                        <div class="card-body">
-                            <div class="quick-links">
-                                <a class="btn btn-primary" href="/webui" target="_self">当前页</a>
-                                <a class="btn btn-secondary" href="/health" target="_blank" rel="noopener noreferrer">/health</a>
-                                <a class="btn btn-secondary" href="/v1/models" target="_blank" rel="noopener noreferrer">/v1/models</a>
-                                <a class="btn btn-secondary" href="/auth/status" target="_blank" rel="noopener noreferrer">/auth/status</a>
+                        <div class="card full-width">
+                            <div class="card-header">
+                                <div>
+                                    <span>调度概览</span>
+                                    <p class="section-intro">账号池当前的路由策略、代理状态与并发运行参数。</p>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <ul class="stack-list">
+                                    <li><span>调度策略</span><strong id="dashboard-routing-mode">Round Robin</strong></li>
+                                    <li><span>代理状态</span><strong id="dashboard-proxy-status">未配置</strong></li>
+                                    <li><span>llmapi Key</span><strong id="dashboard-llmapi-status">未配置</strong></li>
+                                    <li><span>账号池并发</span><strong id="dashboard-concurrency-text">0 / --</strong></li>
+                                </ul>
                             </div>
                         </div>
                     </div>
                 </section>
 
                 <section id="accounts-section" class="section">
-                    <div class="card">
+                    <div class="card full-width">
                         <div class="card-header">
-                            <span>账号池与 Qoder 登录</span>
+                            <div>
+                                <span>账号池</span>
+                                <p class="section-intro">每个账号对应独立的 <code>.qoder</code> 目录；请求默认从已启用账号里轮询调度。</p>
+                            </div>
                             <div class="header-actions">
-                                <button id="accounts-refresh-btn" class="btn btn-secondary btn-sm">刷新账号池</button>
+                                <button id="start-login-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>Oauth 登录</span></button>
+                                <button id="accounts-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新账号池</span></button>
                             </div>
                         </div>
                         <div class="card-body">
-                            <p class="hint">形态参考 iflow2api，但上游账号从 iFlow 换成了 Qoder。每个账号都对应一个独立的受管 <code>.qoder</code> 目录，登录、请求和日志相互隔离。</p>
-                            <div class="form-row">
-                                <button id="start-login-btn" class="btn btn-primary">Oauth登录</button>
+                            <div class="control-cluster">
+                                <div class="form-group control-cluster-main">
+                                    <label for="auth-url">官方登录链接</label>
+                                    <input type="text" id="auth-url" readonly placeholder="启动登录后手动打开">
+                                </div>
+                                <div class="control-cluster-actions">
+                                    <button id="open-auth-url-btn" class="btn btn-secondary" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>打开登录页</span></button>
+                                    <button id="copy-auth-url-btn" class="btn btn-secondary" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span><span>复制链接</span></button>
+                                </div>
                             </div>
-                            <div class="form-group" style="margin-top: 16px;">
-                                <label>官方登录链接</label>
-                                <input type="text" id="auth-url" readonly placeholder="启动登录后手动打开">
-                            </div>
-                            <div class="form-row">
-                                <button id="open-auth-url-btn" class="btn btn-secondary" disabled>打开登录页</button>
-                                <button id="copy-auth-url-btn" class="btn btn-secondary" disabled>复制链接</button>
-                            </div>
-                            <div class="form-group" style="margin-top: 20px;">
-                                <label>已配置账号</label>
+
+                            <div class="table-wrap">
                                 <table class="data-table account-table" id="accounts-table">
                                     <thead>
                                         <tr>
                                             <th>账号</th>
-                                            <th>类型</th>
-                                            <th>目录/状态</th>
+                                            <th>状态</th>
                                             <th>能力</th>
                                             <th>操作</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr><td colspan="5">加载中...</td></tr>
+                                        <tr><td colspan="4">加载中...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
                         </div>
                     </div>
-
                 </section>
 
                 <section id="models-section" class="section">
-                    <div class="card full-width">
-                        <div class="card-header">
-                            <span>模型列表</span>
-                            <div class="header-actions">
-                                <button id="models-refresh-btn" class="btn btn-secondary btn-sm">刷新</button>
+                    <div class="surface-grid models-grid">
+                        <div class="card surface-main">
+                            <div class="card-header">
+                                <div>
+                                    <span>模型列表</span>
+                                    <p class="section-intro">展示当前对外暴露的模型、上下文和推理属性。</p>
+                                </div>
+                                <div class="header-actions">
+                                    <button id="models-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-wrap">
+                                    <table class="data-table model-table" id="models-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ID</th>
+                                                <th>显示名</th>
+                                                <th>上下文</th>
+                                                <th>输出上限</th>
+                                                <th>价格系数</th>
+                                                <th>推理</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr><td colspan="6">加载中...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
-                        <div class="card-body">
-                            <table class="data-table model-table" id="models-table">
-                                <thead>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th>显示名</th>
-                                        <th>上下文</th>
-                                        <th>输出上限</th>
-                                        <th>价格系数</th>
-                                        <th>推理</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr><td colspan="6">加载中...</td></tr>
-                                </tbody>
-                            </table>
+
+                        <div class="card surface-side">
+                            <div class="card-header">
+                                <div>
+                                    <span>运行设置</span>
+                                    <p class="section-intro">代理、llmapi Key 与账号池并发限制。</p>
+                                </div>
+                                <div class="header-actions">
+                                    <button id="settings-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <form id="runtime-settings-form">
+                                    <div class="form-group">
+                                        <label for="settings-proxy-url">代理地址</label>
+                                        <input type="text" id="settings-proxy-url" placeholder="例如 http://127.0.0.1:7890">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settings-llmapi-api-key">llmapi API Key</label>
+                                        <input type="password" id="settings-llmapi-api-key" placeholder="可选">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="settings-account-pool-max-concurrency">账号池总限制并发数</label>
+                                        <input type="number" id="settings-account-pool-max-concurrency" min="1" max="512" placeholder="4">
+                                    </div>
+                                    <p class="hint">保存后会立即作用于新的上游请求；代理地址会同步写入当前进程环境变量。</p>
+                                    <p class="hint">设置文件：<span id="settings-runtime-path" class="mono-inline">--</span></p>
+                                    <p id="settings-runtime-status" class="hint">加载中...</p>
+                                    <div class="actions-bar compact-actions">
+                                        <button type="submit" id="settings-save-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></span><span>保存设置</span></button>
+                                    </div>
+                                </form>
+                            </div>
                         </div>
                     </div>
                 </section>
 
                 <section id="playground-section" class="section">
-                    <div class="card">
-                        <div class="card-header"><span>OpenAI Chat Completions 调试</span></div>
-                        <div class="card-body">
-                            <form id="playground-form">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label for="playground-model">模型</label>
-                                        <select id="playground-model" name="model"></select>
+                    <div class="surface-grid playground-grid">
+                        <div class="card surface-main">
+                            <div class="card-header">
+                                <div>
+                                    <span>调试面板</span>
+                                    <p class="section-intro">直接调用 OpenAI Chat Completions 兼容接口验证账号池输出。</p>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <form id="playground-form">
+                                    <div class="form-row responsive-row">
+                                        <div class="form-group">
+                                            <label for="playground-model">模型</label>
+                                            <select id="playground-model" name="model"></select>
+                                        </div>
+                                        <div class="form-group form-group-sm">
+                                            <label for="playground-max-tokens">max_tokens</label>
+                                            <input type="number" id="playground-max-tokens" min="1" max="32768" placeholder="可选">
+                                        </div>
                                     </div>
                                     <div class="form-group">
-                                        <label for="playground-max-tokens">max_tokens</label>
-                                        <input type="number" id="playground-max-tokens" min="1" max="32768" placeholder="可选">
+                                        <label for="playground-system">System Prompt</label>
+                                        <textarea id="playground-system" rows="4" placeholder="可选"></textarea>
                                     </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="playground-system">System Prompt</label>
-                                    <textarea id="playground-system" rows="4" placeholder="可选"></textarea>
-                                </div>
-                                <div class="form-group">
-                                    <label for="playground-user">User Prompt</label>
-                                    <textarea id="playground-user" rows="8" placeholder="输入你要发给 qoder2api 的问题"></textarea>
-                                </div>
-                                <div class="actions-bar">
-                                    <button type="submit" id="playground-submit-btn" class="btn btn-primary">发送请求</button>
-                                    <button type="button" id="playground-clear-btn" class="btn btn-secondary">清空</button>
-                                </div>
-                            </form>
+                                    <div class="form-group">
+                                        <label for="playground-user">User Prompt</label>
+                                        <textarea id="playground-user" rows="9" placeholder="输入你要发给 qoder2api 的问题"></textarea>
+                                    </div>
+                                    <div class="actions-bar">
+                                        <button type="submit" id="playground-submit-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span><span>发送请求</span></button>
+                                        <button type="button" id="playground-clear-btn" class="btn btn-secondary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg></span><span>清空</span></button>
+                                    </div>
+                                </form>
+                            </div>
                         </div>
-                    </div>
 
-                    <div class="card full-width">
-                        <div class="card-header"><span>模型响应</span></div>
-                        <div class="card-body">
-                            <div id="playground-usage" class="hint">尚未发起请求</div>
-                            <div class="log-container terminal-container response-container">
-                                <pre id="playground-response">等待请求...</pre>
+                        <div class="card surface-side terminal-card">
+                            <div class="card-header">
+                                <div>
+                                    <span>模型响应</span>
+                                    <p id="playground-usage" class="section-intro">尚未发起请求</p>
+                                </div>
+                            </div>
+                            <div class="card-body terminal-shell">
+                                <div class="log-container terminal-container response-container" data-terminal-label="response.stream">
+                                    <pre id="playground-response">等待请求...</pre>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </section>
 
                 <section id="logs-section" class="section">
-                    <div class="card full-width">
-                        <div class="card-header">
-                            <span>程序日志</span>
-                            <div class="header-actions">
-                                <select id="logs-lines-select">
-                                    <option value="100">100 行</option>
-                                    <option value="200" selected>200 行</option>
-                                    <option value="500">500 行</option>
-                                </select>
-                                <button id="logs-refresh-btn" class="btn btn-secondary btn-sm">刷新</button>
+                    <div class="surface-grid logs-grid">
+                        <div class="card surface-main terminal-card">
+                            <div class="card-header">
+                                <div>
+                                    <span>程序日志</span>
+                                    <p id="logs-meta" class="section-intro">日志加载中...</p>
+                                </div>
+                                <div class="header-actions">
+                                    <select id="logs-lines-select">
+                                        <option value="100">100 行</option>
+                                        <option value="200" selected>200 行</option>
+                                        <option value="500">500 行</option>
+                                    </select>
+                                    <button id="logs-autoscroll-btn" class="btn btn-secondary btn-sm" data-mode="active"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></span><span id="logs-autoscroll-label">暂停自动滚动</span></button>
+                                    <button id="logs-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
+                                </div>
+                            </div>
+                            <div class="card-body terminal-shell">
+                                <div class="log-container terminal-container" data-terminal-label="service.log">
+                                    <pre id="logs-output">加载中...</pre>
+                                </div>
                             </div>
                         </div>
-                        <div class="card-body">
-                            <p id="logs-meta" class="hint">日志加载中...</p>
-                            <div class="log-container terminal-container">
-                                <pre id="logs-output">加载中...</pre>
-                            </div>
-                        </div>
-                    </div>
 
-                    <div class="card full-width">
-                        <div class="card-header"><span>网页登录状态</span></div>
-                        <div class="card-body">
-                            <div class="log-container terminal-container">
-                                <pre id="login-terminal-output">尚未启动登录会话。</pre>
+                        <div class="card surface-side terminal-card">
+                            <div class="card-header">
+                                <div>
+                                    <span>网页登录状态</span>
+                                    <p class="section-intro">展示当前登录流程输出和回调提示。</p>
+                                </div>
+                            </div>
+                            <div class="card-body terminal-shell">
+                                <div class="log-container terminal-container" data-terminal-label="browser.login">
+                                    <pre id="login-terminal-output">尚未启动登录会话。</pre>
+                                </div>
                             </div>
                         </div>
                     </div>

@@ -62,3 +62,13 @@ class AccountLabelUpdateRequest(BaseModel):
     label: str
 
     model_config = ConfigDict(extra="forbid")
+
+
+class RuntimeSettingsUpdateRequest(BaseModel):
+    """更新 WebUI 运行设置。"""
+
+    proxy_url: str = ""
+    llmapi_api_key: str = ""
+    account_pool_max_concurrency: int = Field(default=4, ge=1, le=512)
+
+    model_config = ConfigDict(extra="forbid")

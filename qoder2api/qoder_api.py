@@ -28,6 +28,7 @@ from .catalog import QoderModelInfo
 from .crypto import build_bearer_token, build_pkce_challenge, generate_pkce_verifier
 from .settings import Settings
 from .streaming import ParsedStreamEvent, QoderStreamJSONParser
+from .runtime_settings import load_runtime_settings
 
 _DEFAULT_CLIENT_ID = "e93fe488-5778-4c35-a6fc-0f54ed7b3139"
 _CHAT_PATH = (
@@ -110,10 +111,14 @@ class QoderAPIClient:
         self._client_factory = client_factory or self._default_client
 
     def _default_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            timeout=self.settings.request_timeout_seconds,
-            follow_redirects=True,
-        )
+        runtime_settings = load_runtime_settings(self.settings)
+        client_kwargs: dict[str, Any] = {
+            "timeout": self.settings.request_timeout_seconds,
+            "follow_redirects": True,
+        }
+        if runtime_settings.proxy_url:
+            client_kwargs["proxy"] = runtime_settings.proxy_url
+        return httpx.AsyncClient(**client_kwargs)
 
     @property
     def user_agent(self) -> str:

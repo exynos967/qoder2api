@@ -21,6 +21,9 @@ class QoderModelInfo:
     price_factor: float = 0.0
 
 
+_DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
+
+
 _FALLBACK_MODELS = [
     QoderModelInfo(id="auto", display_name="Auto", scene="chat", is_default=True, price_factor=1.0),
     QoderModelInfo(id="ultimate", display_name="Ultimate", scene="chat", is_reasoning=True, price_factor=1.6),
@@ -31,8 +34,12 @@ _FALLBACK_MODELS = [
     QoderModelInfo(id="q35model", display_name="Qwen3.5-Plus", scene="chat", price_factor=0.2),
     QoderModelInfo(id="gmodel", display_name="GLM-5", scene="chat", price_factor=0.5),
     QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", price_factor=0.3),
-    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.5", scene="chat", price_factor=0.2),
+    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.7", scene="chat", price_factor=0.2),
 ]
+
+
+def _normalize_display_name(model_id: str, display_name: str) -> str:
+    return _DISPLAY_NAME_OVERRIDES.get(model_id, display_name)
 
 
 def load_qoder_models(qoder_home: Path, scene: str = "chat") -> list[QoderModelInfo]:
@@ -62,7 +69,7 @@ def load_qoder_models(qoder_home: Path, scene: str = "chat") -> list[QoderModelI
         parsed_models.append(
             QoderModelInfo(
                 id=model_key,
-                display_name=str(item.get("display_name") or model_key),
+                display_name=_normalize_display_name(model_key, str(item.get("display_name") or model_key)),
                 scene=scene,
                 max_input_tokens=int(item.get("max_input_tokens") or 180000),
                 max_output_tokens=int(item.get("max_output_tokens") or 32768),

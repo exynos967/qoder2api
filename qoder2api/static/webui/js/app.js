@@ -2,8 +2,32 @@ const OVERVIEW_API = '/webui/api/overview';
 const LOGS_API = '/webui/api/logs';
 const ACCOUNTS_API = '/webui/api/accounts';
 const MODELS_API = '/v1/models';
+const SETTINGS_API = '/webui/api/settings';
 const COMPLETIONS_API = '/v1/chat/completions';
 const AUTH_START_API = '/auth/browser/start';
+
+const PAGE_META = {
+    dashboard: {
+        title: '仪表盘',
+        subtitle: '账号状态、轮询调度与运行健康总览',
+    },
+    accounts: {
+        title: '账号池',
+        subtitle: '登录、启停、检测与多账号轮询管理',
+    },
+    models: {
+        title: '模型与设置',
+        subtitle: '模型暴露、代理配置与账号池并发限制',
+    },
+    playground: {
+        title: '调试面板',
+        subtitle: '直接验证 OpenAI 兼容输出与账号池行为',
+    },
+    logs: {
+        title: '日志追踪',
+        subtitle: '查看服务日志与网页登录过程输出',
+    },
+};
 
 const state = {
     activePage: 'dashboard',
@@ -14,10 +38,34 @@ const state = {
     popup: null,
     models: [],
     accounts: [],
+    runtimeSettings: null,
+    overview: null,
+    activeAccountId: null,
+    busyAccountId: null,
+    logsAutoScroll: true,
 };
 
 function $(id) {
     return document.getElementById(id);
+}
+
+function setText(id, value) {
+    const element = $(id);
+    if (element) {
+        element.textContent = value;
+    }
+}
+
+function setDataState(id, stateValue) {
+    const element = $(id);
+    if (!element) {
+        return;
+    }
+    if (stateValue) {
+        element.dataset.state = stateValue;
+    } else {
+        delete element.dataset.state;
+    }
 }
 
 function escapeHtml(value) {
@@ -37,8 +85,8 @@ function showToast(message, type = 'info') {
     container.appendChild(toast);
 
     setTimeout(() => {
-        toast.style.animation = 'slideIn 0.3s ease reverse';
-        setTimeout(() => toast.remove(), 300);
+        toast.style.animation = 'slideIn 0.28s ease reverse';
+        setTimeout(() => toast.remove(), 280);
     }, 3000);
 }
 
@@ -90,6 +138,12 @@ function setStatusBadge(element, status, text) {
     element.classList.add('stopped');
 }
 
+function updatePageMeta(page) {
+    const meta = PAGE_META[page] || PAGE_META.dashboard;
+    setText('page-title', meta.title);
+    setText('page-subtitle', meta.subtitle);
+}
+
 function switchPage(page) {
     state.activePage = page;
 
@@ -101,8 +155,7 @@ function switchPage(page) {
         section.classList.toggle('active', section.id === `${page}-section`);
     });
 
-    const activeNav = document.querySelector(`.nav-item[data-page="${page}"] span:last-child`);
-    $('page-title').textContent = activeNav ? activeNav.textContent : 'qoder2api';
+    updatePageMeta(page);
 }
 
 function renderLoginState(session, auth = {}) {
@@ -136,6 +189,133 @@ function renderLoginState(session, auth = {}) {
     } else {
         $('login-terminal-output').textContent = '尚未启动登录会话。';
     }
+
+    autoScrollLogsIfNeeded();
+}
+
+function updateTopbarSummary() {
+    const accountsPayload = state.overview?.accounts || { total_accounts: 0, enabled_accounts: 0 };
+    const health = state.overview?.health || {};
+    const total = Number(accountsPayload.total_accounts || 0);
+    const enabled = Number(accountsPayload.enabled_accounts || 0);
+    const limit = state.runtimeSettings?.account_pool_max_concurrency ?? health.account_pool_max_concurrency ?? '--';
+    const active = health.active_requests ?? 0;
+    const summary = `${enabled}/${total} 启用 · ${active} 活跃 · 上限 ${limit}`;
+    setText('topbar-summary', summary);
+    setDataState('topbar-summary', enabled > 0 ? 'ready' : 'warning');
+}
+
+function resolvePlanTone(planText) {
+    const text = String(planText || '').toLowerCase();
+    if (!text) {
+        return 'tone-muted';
+    }
+    if (text.includes('trial') || text.includes('pro')) {
+        return 'tone-success';
+    }
+    if (text.includes('free')) {
+        return 'tone-neutral';
+    }
+    return 'tone-muted';
+}
+
+function resolveQuotaState(isQuotaExceeded) {
+    if (isQuotaExceeded === true) {
+        return { text: '额度受限', tone: 'tone-warning' };
+    }
+    if (isQuotaExceeded === false) {
+        return { text: '额度正常', tone: 'tone-success' };
+    }
+    return { text: '额度未知', tone: 'tone-muted' };
+}
+
+function iconSvg(name) {
+    const icons = {
+        detect: '<svg viewBox="0 0 24 24" fill="none"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="3"/></svg>',
+        test: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16v14H4z"/><path d="m8 10 3 2-3 2"/><path d="M13 16h3"/></svg>',
+        rename: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>',
+        toggle_on: '<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="16" cy="12" r="3"/></svg>',
+        toggle_off: '<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="8" cy="12" r="3"/></svg>',
+        delete: '<svg viewBox="0 0 24 24" fill="none"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>',
+    };
+    return icons[name] || icons.detect;
+}
+
+function buildActionButton({ action, accountId, label, icon, disabled = false, variant = 'secondary', extraAttrs = '' }) {
+    return `<button type="button" class="btn btn-${variant} btn-sm btn-with-icon" data-action="${action}" data-account-id="${accountId}" ${extraAttrs} ${disabled ? 'disabled' : ''}><span class="btn-icon" aria-hidden="true">${iconSvg(icon)}</span><span>${label}</span></button>`;
+}
+
+function loadingIconSvg() {
+    return '<svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>';
+}
+
+function actionLoadingLabel(action) {
+    const labels = {
+        detect: '检测中',
+        test: '测试中',
+        rename: '保存中',
+        toggle: '更新中',
+        delete: '删除中',
+    };
+    return labels[action] || '处理中';
+}
+
+function syncAccountRowStates() {
+    document.querySelectorAll('#accounts-table tbody tr[data-account-id]').forEach((row) => {
+        row.classList.toggle('is-active', row.dataset.accountId === state.activeAccountId);
+        row.classList.toggle('is-busy', row.dataset.accountId === state.busyAccountId);
+    });
+}
+
+function setActionButtonLoading(button, label) {
+    const originalHtml = button.innerHTML;
+    const wasDisabled = button.disabled;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    button.innerHTML = `<span class="btn-icon" aria-hidden="true">${loadingIconSvg()}</span><span>${label}</span>`;
+    return () => {
+        button.innerHTML = originalHtml;
+        button.disabled = wasDisabled;
+        button.classList.remove('is-loading');
+    };
+}
+
+function scrollTerminalToBottom(id) {
+    const element = $(id);
+    const container = element?.closest('.log-container');
+    if (!container) {
+        return;
+    }
+    container.scrollTop = container.scrollHeight;
+}
+
+function autoScrollLogsIfNeeded() {
+    if (!state.logsAutoScroll) {
+        return;
+    }
+    scrollTerminalToBottom('logs-output');
+    scrollTerminalToBottom('login-terminal-output');
+}
+
+function updateLogsAutoscrollUi() {
+    const button = $('logs-autoscroll-btn');
+    const label = $('logs-autoscroll-label');
+    if (!button || !label) {
+        return;
+    }
+    button.dataset.mode = state.logsAutoScroll ? 'active' : 'paused';
+    label.textContent = state.logsAutoScroll ? '暂停自动滚动' : '恢复自动滚动';
+}
+
+function toggleLogsAutoscroll() {
+    state.logsAutoScroll = !state.logsAutoScroll;
+    updateLogsAutoscrollUi();
+    if (state.logsAutoScroll) {
+        autoScrollLogsIfNeeded();
+        showToast('日志区已恢复自动滚动', 'success');
+    } else {
+        showToast('日志区已暂停自动滚动', 'info');
+    }
 }
 
 function renderOverview(data) {
@@ -143,67 +323,72 @@ function renderOverview(data) {
     const auth = data.auth || {};
     const session = data.session || null;
     const accountsPayload = data.accounts || { accounts: [], total_accounts: 0, enabled_accounts: 0 };
+    const totalAccounts = Number(accountsPayload.total_accounts || 0);
+    const enabledAccounts = Number(accountsPayload.enabled_accounts || 0);
+    const activeRequests = Number(health.active_requests || 0);
+    const concurrencyLimit = health.account_pool_max_concurrency ?? '--';
+    const proxyConfigured = Boolean(state.runtimeSettings?.proxy_url || health.proxy_configured);
+    const llmapiConfigured = Boolean(state.runtimeSettings?.llmapi_api_key || health.llmapi_api_key_configured);
+
+    state.overview = data;
 
     setStatusBadge(
         $('auth-status-badge'),
         auth.logged_in_hint ? 'logged_in' : 'missing',
-        auth.logged_in_hint ? '已发现本地登录态' : '尚未登录'
+        auth.logged_in_hint ? '已发现登录态' : '尚未登录'
     );
-    $('auth-status-text').textContent = auth.logged_in_hint
-        ? `账号池 ${accountsPayload.total_accounts || 0} 个，启用 ${accountsPayload.enabled_accounts || 0} 个。`
-        : '当前未发现可用登录态，请去“账号池”页发起网页登录。';
+    setText(
+        'auth-status-text',
+        auth.logged_in_hint
+            ? `账号池 ${totalAccounts} 个，启用 ${enabledAccounts} 个，默认从已启用账号中轮询调度。`
+            : '当前未发现可用登录态，请前往账号池页发起网页登录。'
+    );
 
-    const sessionLabel = session ? session.status : 'idle';
-    setStatusBadge($('session-status-badge'), sessionLabel, session ? session.status : '空闲');
-    $('session-status-text').textContent = session ? session.message : '当前没有活跃登录会话';
+    setText('health-status', health.status || '--');
+    setText('health-version', health.version || '--');
+    setText('health-infer-endpoint', health.infer_endpoint || '--');
+    setText('health-openapi-endpoint', health.openapi_endpoint || '--');
+    setText('models-count', String(health.models || 0));
 
-    $('health-status').textContent = health.status || '--';
-    $('health-version').textContent = health.version || '--';
-    $('health-qoder-home').textContent = health.qoder_home || '--';
-    $('health-workspace').textContent = health.workspace || '--';
-    $('health-infer-endpoint').textContent = health.infer_endpoint || '--';
-    $('health-openapi-endpoint').textContent = health.openapi_endpoint || '--';
-    $('health-session-id').textContent = session?.session_id || '--';
-    $('models-count').textContent = String(health.models || 0);
-    $('topbar-summary').textContent = `${health.version || 'unknown'} · 账号 ${accountsPayload.enabled_accounts || 0}/${accountsPayload.total_accounts || 0}`;
+    setText('dashboard-enabled-count', String(enabledAccounts));
+    setText('dashboard-accounts-total', String(totalAccounts));
+    setText('dashboard-active-requests', String(activeRequests));
+    setText('dashboard-concurrency-limit', String(concurrencyLimit));
+    setText('dashboard-routing-mode', 'Round Robin');
+    setText('dashboard-proxy-status', proxyConfigured ? '已配置' : '未配置');
+    setText('dashboard-llmapi-status', llmapiConfigured ? '已配置' : '未配置');
+    setText('dashboard-concurrency-text', `${activeRequests} / ${concurrencyLimit}`);
+    setText('dashboard-concurrency-pill', `并发 ${concurrencyLimit}`);
+    setText('dashboard-proxy-pill', proxyConfigured ? '代理已配置' : '代理未配置');
+    setText('dashboard-monitor-status', auth.logged_in_hint ? 'POOL READY' : 'WAITING AUTH');
+    setText('dashboard-monitor-accounts', `${enabledAccounts} / ${totalAccounts}`);
+    setText('dashboard-monitor-active', `${activeRequests} req`);
+    setText('dashboard-monitor-models', `${Number(health.models || 0)} online`);
+    setText('dashboard-monitor-llmapi', llmapiConfigured ? '已配置' : '未配置');
+    setText('dashboard-monitor-concurrency', String(concurrencyLimit));
+    setText('dashboard-monitor-proxy', proxyConfigured ? '已配置' : '未配置');
+    setDataState('dashboard-concurrency-pill', 'ready');
+    setDataState('dashboard-proxy-pill', proxyConfigured ? 'ready' : 'warning');
 
     state.accounts = accountsPayload.accounts || [];
+    updateTopbarSummary();
     renderLoginState(session, auth);
     renderAccountsTable(state.accounts);
 }
 
-function formatAccountType(account) {
-    if (!account.managed) {
-        return '外部 .qoder';
-    }
-    return 'Qoder Browser';
-}
-
 function buildAccountStatusText(account) {
-    const flags = [];
-    flags.push(account.enabled ? '启用' : '停用');
-    flags.push(account.logged_in_hint ? '已登录' : '未登录');
-    if (account.status) {
-        flags.push(account.status);
-    }
-    if (account.status_error) {
-        flags.push('状态异常');
-    }
-    return flags.join(' / ');
+    return account.enabled ? '启用' : '禁用';
 }
 
 function buildAccountCapabilityText(account) {
     const planText = account.plan_tier_name || account.user_tag || account.user_type || '未检测';
     const emailText = account.email || '--';
-    const quotaText = account.is_quota_exceeded === true
-        ? '额度受限'
-        : (account.is_quota_exceeded === false ? '额度正常' : '额度未知');
-    const checkedText = account.status_checked_at || '--';
+    const checkedText = account.status_checked_at || '未检测';
     return {
         planText,
         emailText,
-        quotaText,
         checkedText,
+        quota: resolveQuotaState(account.is_quota_exceeded),
     };
 }
 
@@ -212,26 +397,57 @@ function renderAccountsTable(accounts) {
     tbody.innerHTML = '';
 
     if (!accounts.length) {
-        tbody.innerHTML = '<tr><td colspan="5">暂无账号</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4">暂无账号</td></tr>';
         return;
     }
 
     for (const account of accounts) {
         const tr = document.createElement('tr');
-        const machineIdText = account.machine_id ? `<div class="table-secondary-text mono-inline">machine_id: ${escapeHtml(account.machine_id)}</div>` : '';
-        const authDirText = `<div class="table-secondary-text mono-inline">${escapeHtml(account.qoder_home)}</div>`;
+        tr.dataset.accountId = account.id;
+        const machineIdText = account.machine_id
+            ? `<div class="table-secondary-text mono-inline">machine_id: ${escapeHtml(account.machine_id)}</div>`
+            : '';
         const actions = [];
         const capability = buildAccountCapabilityText(account);
+        const statusTone = account.enabled ? 'tone-success' : 'tone-muted';
+        const planTone = resolvePlanTone(capability.planText);
 
-        actions.push(`<button type="button" class="btn btn-secondary btn-sm" data-action="detect" data-account-id="${account.id}" ${(!account.logged_in_hint) ? 'disabled' : ''}>检测状态</button>`);
-        actions.push(`<button type="button" class="btn btn-secondary btn-sm" data-action="test" data-account-id="${account.id}" ${(!account.enabled || !account.logged_in_hint) ? 'disabled' : ''}>测试</button>`);
+        actions.push(buildActionButton({
+            action: 'detect',
+            accountId: account.id,
+            label: '检测状态',
+            icon: 'detect',
+            disabled: !account.logged_in_hint,
+        }));
+        actions.push(buildActionButton({
+            action: 'test',
+            accountId: account.id,
+            label: '测试',
+            icon: 'test',
+            disabled: !account.enabled || !account.logged_in_hint,
+        }));
 
         if (account.managed) {
-            actions.push(`<button type="button" class="btn btn-secondary btn-sm" data-action="rename" data-account-id="${account.id}">改名</button>`);
-            actions.push(`<button type="button" class="btn btn-secondary btn-sm" data-action="toggle" data-account-id="${account.id}" data-enabled="${account.enabled ? '1' : '0'}">${account.enabled ? '停用' : '启用'}</button>`);
-            actions.push(`<button type="button" class="btn btn-danger btn-sm" data-action="delete" data-account-id="${account.id}">删除</button>`);
-        } else {
-            actions.push('<span class="table-secondary-text">外部账号</span>');
+            actions.push(buildActionButton({
+                action: 'rename',
+                accountId: account.id,
+                label: '改名',
+                icon: 'rename',
+            }));
+            actions.push(buildActionButton({
+                action: 'toggle',
+                accountId: account.id,
+                label: account.enabled ? '停用' : '启用',
+                icon: account.enabled ? 'toggle_on' : 'toggle_off',
+                extraAttrs: `data-enabled="${account.enabled ? '1' : '0'}"`,
+            }));
+            actions.push(buildActionButton({
+                action: 'delete',
+                accountId: account.id,
+                label: '删除',
+                icon: 'delete',
+                variant: 'danger',
+            }));
         }
 
         tr.innerHTML = `
@@ -239,14 +455,15 @@ function renderAccountsTable(accounts) {
                 <div class="table-primary-text">${escapeHtml(account.label)}</div>
                 ${machineIdText}
             </td>
-            <td>${escapeHtml(formatAccountType(account))}</td>
-            <td>
-                <div class="table-primary-text">${escapeHtml(buildAccountStatusText(account))}</div>
-                ${authDirText}
+            <td class="account-status-cell">
+                <span class="table-badge ${statusTone}">${escapeHtml(buildAccountStatusText(account))}</span>
             </td>
-            <td>
-                <div class="table-primary-text">${escapeHtml(capability.planText)}</div>
-                <div class="table-secondary-text">${escapeHtml(capability.emailText)} · ${escapeHtml(capability.quotaText)}</div>
+            <td class="account-capability-cell">
+                <div class="table-badge-row">
+                    <span class="table-badge ${planTone}">${escapeHtml(capability.planText)}</span>
+                    <span class="table-badge ${capability.quota.tone}">${escapeHtml(capability.quota.text)}</span>
+                </div>
+                <div class="table-secondary-text">${escapeHtml(capability.emailText)}</div>
                 <div class="table-secondary-text">模型 ${escapeHtml(String(account.model_count ?? 0))} 个 · 检测：${escapeHtml(capability.checkedText)}</div>
             </td>
             <td class="account-actions-cell">
@@ -255,6 +472,8 @@ function renderAccountsTable(accounts) {
         `;
         tbody.appendChild(tr);
     }
+
+    syncAccountRowStates();
 }
 
 function renderModels(models) {
@@ -269,18 +488,52 @@ function renderModels(models) {
 
     for (const model of models) {
         const tr = document.createElement('tr');
+        const reasoningTone = model.is_reasoning ? 'tone-success' : 'tone-muted';
         tr.innerHTML = `
             <td><span class="mono-inline">${escapeHtml(model.id)}</span></td>
-            <td>${escapeHtml(model.display_name || model.id)}</td>
+            <td>
+                <div class="table-primary-text">${escapeHtml(model.display_name || model.id)}</div>
+            </td>
             <td>${Number(model.context_window || 0).toLocaleString()}</td>
             <td>${Number(model.max_output_tokens || 0).toLocaleString()}</td>
             <td>${escapeHtml(String(model.price_factor ?? '--'))}</td>
-            <td>${model.is_reasoning ? '是' : '否'}</td>
+            <td><span class="table-badge ${reasoningTone}">${model.is_reasoning ? 'Reasoning' : '标准'}</span></td>
         `;
         tbody.appendChild(tr);
     }
 
     renderModelOptions(models);
+}
+
+function renderRuntimeSettings(payload) {
+    const settings = payload?.settings || payload || {};
+    const limit = payload?.limiter?.limit ?? settings.account_pool_max_concurrency ?? '--';
+    const active = payload?.limiter?.active ?? 0;
+    const proxyConfigured = Boolean(settings.proxy_url);
+    const llmapiConfigured = Boolean(settings.llmapi_api_key);
+
+    state.runtimeSettings = settings;
+    $('settings-proxy-url').value = settings.proxy_url || '';
+    $('settings-llmapi-api-key').value = settings.llmapi_api_key || '';
+    $('settings-account-pool-max-concurrency').value = String(settings.account_pool_max_concurrency ?? 4);
+    setText('settings-runtime-path', payload?.path || '--');
+    setText(
+        'settings-runtime-status',
+        `当前生效并发 ${limit}，运行中 ${active}。代理${proxyConfigured ? '已配置' : '未配置'}，llmapi API Key${llmapiConfigured ? '已配置' : '未配置'}。`
+    );
+
+    setText('dashboard-concurrency-limit', String(limit));
+    setText('dashboard-concurrency-text', `${active} / ${limit}`);
+    setText('dashboard-concurrency-pill', `并发 ${limit}`);
+    setText('dashboard-proxy-pill', proxyConfigured ? '代理已配置' : '代理未配置');
+    setText('dashboard-proxy-status', proxyConfigured ? '已配置' : '未配置');
+    setText('dashboard-llmapi-status', llmapiConfigured ? '已配置' : '未配置');
+    setText('dashboard-monitor-concurrency', String(limit));
+    setText('dashboard-monitor-proxy', proxyConfigured ? '已配置' : '未配置');
+    setText('dashboard-monitor-llmapi', llmapiConfigured ? '已配置' : '未配置');
+    setDataState('dashboard-concurrency-pill', 'ready');
+    setDataState('dashboard-proxy-pill', proxyConfigured ? 'ready' : 'warning');
+    updateTopbarSummary();
 }
 
 function renderModelOptions(models) {
@@ -301,10 +554,12 @@ function renderModelOptions(models) {
 }
 
 function renderLogs(data) {
-    $('logs-meta').textContent = data.exists
-        ? `${data.path} · 最近 ${data.lines} 行`
-        : `日志文件不存在：${data.path}`;
+    setText(
+        'logs-meta',
+        data.exists ? `${data.path} · 最近 ${data.lines} 行` : `日志文件不存在：${data.path}`
+    );
     $('logs-output').textContent = data.content || '暂无日志';
+    autoScrollLogsIfNeeded();
 }
 
 async function loadOverview() {
@@ -323,6 +578,12 @@ async function loadAccounts() {
 async function loadModels() {
     const data = await apiRequest(MODELS_API);
     renderModels(data.data || []);
+}
+
+async function loadRuntimeSettings() {
+    const data = await apiRequest(SETTINGS_API);
+    renderRuntimeSettings(data);
+    return data;
 }
 
 async function loadLogs() {
@@ -350,7 +611,7 @@ function startSessionPolling() {
             renderLoginState(session);
             if (session.done) {
                 stopSessionPolling();
-                await Promise.all([loadOverview(), loadAccounts(), loadModels()]);
+                await Promise.all([loadOverview(), loadAccounts(), loadModels(), loadRuntimeSettings()]);
                 showToast(session.message || '登录流程已结束', session.status === 'success' ? 'success' : 'info');
             }
         } catch (error) {
@@ -435,6 +696,39 @@ async function testAccount(accountId) {
     showToast(result.message ? `${result.message}${preview}` : '账号测试成功', 'success');
 }
 
+async function saveRuntimeSettings(event) {
+    event.preventDefault();
+
+    const proxyUrl = $('settings-proxy-url').value.trim();
+    const llmapiApiKey = $('settings-llmapi-api-key').value.trim();
+    const concurrencyValue = $('settings-account-pool-max-concurrency').value.trim();
+    const parsedConcurrency = Number(concurrencyValue || '4');
+
+    if (!Number.isInteger(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 512) {
+        showToast('账号池总限制并发数必须是 1 到 512 的整数', 'warning');
+        return;
+    }
+
+    $('settings-save-btn').disabled = true;
+    try {
+        const result = await apiRequest(SETTINGS_API, {
+            method: 'PUT',
+            body: JSON.stringify({
+                proxy_url: proxyUrl,
+                llmapi_api_key: llmapiApiKey,
+                account_pool_max_concurrency: parsedConcurrency,
+            }),
+        });
+        renderRuntimeSettings(result);
+        showToast(result.message || '运行设置已保存', 'success');
+        await loadOverview();
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally {
+        $('settings-save-btn').disabled = false;
+    }
+}
+
 async function refreshAccountStatus(accountId) {
     const result = await apiRequest(`${ACCOUNTS_API}/${accountId}/status`, {
         method: 'POST',
@@ -507,7 +801,7 @@ async function submitPlayground(event) {
 
     $('playground-submit-btn').disabled = true;
     $('playground-response').textContent = '请求中...';
-    $('playground-usage').textContent = '等待模型返回';
+    setText('playground-usage', '等待模型返回');
 
     try {
         const data = await apiRequest(COMPLETIONS_API, {
@@ -518,11 +812,14 @@ async function submitPlayground(event) {
         const content = data?.choices?.[0]?.message?.content || '';
         const usage = data?.usage || {};
         $('playground-response').textContent = content || '(空响应)';
-        $('playground-usage').textContent = `model=${data.model || model} · prompt_tokens=${usage.prompt_tokens ?? '--'} · completion_tokens=${usage.completion_tokens ?? '--'} · total_tokens=${usage.total_tokens ?? '--'}`;
+        setText(
+            'playground-usage',
+            `model=${data.model || model} · prompt_tokens=${usage.prompt_tokens ?? '--'} · completion_tokens=${usage.completion_tokens ?? '--'} · total_tokens=${usage.total_tokens ?? '--'}`
+        );
         showToast('请求完成', 'success');
     } catch (error) {
         $('playground-response').textContent = error.message;
-        $('playground-usage').textContent = '请求失败';
+        setText('playground-usage', '请求失败');
         showToast(error.message, 'error');
     } finally {
         $('playground-submit-btn').disabled = false;
@@ -534,10 +831,16 @@ function clearPlayground() {
     $('playground-user').value = '';
     $('playground-max-tokens').value = '';
     $('playground-response').textContent = '等待请求...';
-    $('playground-usage').textContent = '尚未发起请求';
+    setText('playground-usage', '尚未发起请求');
 }
 
 async function handleAccountsTableClick(event) {
+    const row = event.target.closest('tbody tr[data-account-id]');
+    if (row) {
+        state.activeAccountId = row.dataset.accountId;
+        syncAccountRowStates();
+    }
+
     const button = event.target.closest('button[data-action]');
     if (!button) {
         return;
@@ -545,6 +848,11 @@ async function handleAccountsTableClick(event) {
 
     const accountId = button.dataset.accountId;
     const action = button.dataset.action;
+    const restoreButton = setActionButtonLoading(button, actionLoadingLabel(action));
+    state.activeAccountId = accountId;
+    state.busyAccountId = accountId;
+    syncAccountRowStates();
+
     try {
         if (action === 'toggle') {
             await toggleAccount(accountId, button.dataset.enabled === '1');
@@ -559,6 +867,10 @@ async function handleAccountsTableClick(event) {
         }
     } catch (error) {
         showToast(error.message, 'error');
+    } finally {
+        restoreButton();
+        state.busyAccountId = null;
+        syncAccountRowStates();
     }
 }
 
@@ -568,8 +880,8 @@ function bindEvents() {
             event.preventDefault();
             const page = item.dataset.page;
             switchPage(page);
-            if (page === 'models' && !state.models.length) {
-                await loadModels();
+            if (page === 'models') {
+                await Promise.all([loadModels(), loadRuntimeSettings()]);
             }
             if (page === 'logs') {
                 await loadLogs();
@@ -581,21 +893,27 @@ function bindEvents() {
     });
 
     $('dashboard-refresh-btn').addEventListener('click', () => loadOverview().catch((error) => showToast(error.message, 'error')));
-    $('accounts-refresh-btn').addEventListener('click', () => loadAccounts().catch((error) => showToast(error.message, 'error')));
-    $('models-refresh-btn').addEventListener('click', () => loadModels().catch((error) => showToast(error.message, 'error')));
+    $('accounts-refresh-btn').addEventListener('click', () => Promise.all([loadOverview(), loadAccounts()]).catch((error) => showToast(error.message, 'error')));
+    $('models-refresh-btn').addEventListener('click', () => Promise.all([loadModels(), loadRuntimeSettings()]).catch((error) => showToast(error.message, 'error')));
+    $('settings-refresh-btn').addEventListener('click', () => loadRuntimeSettings().catch((error) => showToast(error.message, 'error')));
     $('logs-refresh-btn').addEventListener('click', () => loadLogs().catch((error) => showToast(error.message, 'error')));
+    $('logs-autoscroll-btn').addEventListener('click', toggleLogsAutoscroll);
+    $('logs-lines-select').addEventListener('change', () => loadLogs().catch((error) => showToast(error.message, 'error')));
     $('start-login-btn').addEventListener('click', startBrowserLogin);
     $('open-auth-url-btn').addEventListener('click', openAuthUrl);
     $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);
     $('playground-form').addEventListener('submit', submitPlayground);
+    $('runtime-settings-form').addEventListener('submit', saveRuntimeSettings);
     $('playground-clear-btn').addEventListener('click', clearPlayground);
     $('accounts-table').addEventListener('click', handleAccountsTableClick);
 }
 
 async function init() {
+    updatePageMeta(state.activePage);
+    updateLogsAutoscrollUi();
     bindEvents();
     try {
-        await Promise.all([loadOverview(), loadAccounts(), loadModels()]);
+        await Promise.all([loadOverview(), loadAccounts(), loadModels(), loadRuntimeSettings()]);
         if (state.sessionId && !state.sessionDone) {
             startSessionPolling();
         }

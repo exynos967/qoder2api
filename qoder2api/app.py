@@ -28,15 +28,18 @@ from .accounts import (
 from .account_status import load_account_status, refresh_account_status
 from .auth_state import inspect_local_auth
 from .catalog import QoderModelInfo, load_qoder_models
+from .concurrency import AdjustableConcurrencyLimiter
 from .login import QoderLoginError, QoderLoginManager
 from .prompting import PreparedPrompt, render_openai_messages
 from .qoder_api import QoderAPIError
 from .qoder_cli import QoderCLIError, QoderCLIInvoker
+from .runtime_settings import RuntimeSettingsManager
 from .schemas import (
     AccountLabelUpdateRequest,
     AccountToggleRequest,
     ChatCompletionRequest,
     LoginSessionInputRequest,
+    RuntimeSettingsUpdateRequest,
     StartBrowserLoginRequest,
 )
 from .settings import Settings
@@ -146,12 +149,36 @@ def get_account_pool() -> QoderAccountPool:
     return QoderAccountPool(get_settings())
 
 
+def _get_runtime_services() -> tuple[RuntimeSettingsManager, AdjustableConcurrencyLimiter]:
+    settings = get_settings()
+    service_key = str(settings.workspace_path)
+    services = _runtime_services.get(service_key)
+    if services is None:
+        manager = RuntimeSettingsManager(settings)
+        snapshot = manager.load()
+        services = (
+            manager,
+            AdjustableConcurrencyLimiter(snapshot.account_pool_max_concurrency),
+        )
+        _runtime_services[service_key] = services
+    return services
+
+
+def get_runtime_settings_manager() -> RuntimeSettingsManager:
+    return _get_runtime_services()[0]
+
+
+def get_invocation_limiter() -> AdjustableConcurrencyLimiter:
+    return _get_runtime_services()[1]
+
+
 app = FastAPI(
     title="qoder2api",
     description="独立 Qoder OpenAI 兼容代理。",
     version=__version__,
 )
 logger = logging.getLogger("qoder2api")
+_runtime_services: dict[str, tuple[RuntimeSettingsManager, AdjustableConcurrencyLimiter]] = {}
 
 _webui_static_dir = get_webui_static_dir()
 if _webui_static_dir.exists():
@@ -183,6 +210,8 @@ async def health() -> dict[str, Any]:
     settings = get_settings()
     invoker = get_invoker()
     account_pool = get_account_pool()
+    runtime_settings = get_runtime_settings_manager().load()
+    limiter_snapshot = get_invocation_limiter().snapshot()
     try:
         model_count = len(invoker.list_models())
         model_error = None
@@ -201,6 +230,10 @@ async def health() -> dict[str, Any]:
         "model_error": model_error,
         "accounts_total": len(account_pool.list_accounts()),
         "accounts_enabled": len(account_pool.get_enabled_accounts()),
+        "proxy_configured": bool(runtime_settings.proxy_url),
+        "llmapi_api_key_configured": bool(runtime_settings.llmapi_api_key),
+        "account_pool_max_concurrency": runtime_settings.account_pool_max_concurrency,
+        "active_requests": limiter_snapshot["active"],
     }
 
 
@@ -289,6 +322,16 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
     }
 
 
+def _build_runtime_settings_payload() -> dict[str, Any]:
+    manager = get_runtime_settings_manager()
+    snapshot = manager.load()
+    return {
+        'settings': snapshot.model_dump(),
+        'path': str(manager.path),
+        'limiter': get_invocation_limiter().snapshot(),
+    }
+
+
 def _build_accounts_payload(*, include_pending: bool = True) -> dict[str, Any]:
     pool = get_account_pool()
     accounts = pool.list_accounts(include_pending=include_pending)
@@ -322,6 +365,27 @@ async def webui_overview() -> dict[str, Any]:
 async def webui_logs(lines: int = Query(default=200, ge=1, le=2000)) -> dict[str, Any]:
     settings = get_settings()
     return build_logs_payload(settings.app_log_path, lines=lines)
+
+
+@app.get("/webui/api/settings")
+async def webui_get_runtime_settings() -> dict[str, Any]:
+    return _build_runtime_settings_payload()
+
+
+@app.put("/webui/api/settings")
+async def webui_update_runtime_settings(
+    request: RuntimeSettingsUpdateRequest,
+) -> dict[str, Any]:
+    manager = get_runtime_settings_manager()
+    snapshot = manager.save(request.model_dump())
+    limiter_snapshot = await get_invocation_limiter().update_limit(
+        snapshot.account_pool_max_concurrency
+    )
+    payload = _build_runtime_settings_payload()
+    payload['success'] = True
+    payload['message'] = '运行设置已保存'
+    payload['limiter'] = limiter_snapshot
+    return payload
 
 
 @app.get("/auth/status")
@@ -440,19 +504,19 @@ async def webui_test_account(account_id: str) -> dict[str, Any]:
     if not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
         raise QoderLoginError("账号当前没有可用登录态，无法测试", status_code=400)
 
-    output_text, resolved_model = await get_invoker().run_text(
-        prompt="请只回复 ok",
-        attachments=[],
-        model="auto",
-        max_tokens=32,
-        preferred_account_id=account_id,
-    )
+    async with get_invocation_limiter().slot():
+        output_text, resolved_model = await get_invoker().run_text(
+            prompt="请只回复 ok",
+            attachments=[],
+            model="auto",
+            max_tokens=32,
+            preferred_account_id=account_id,
+        )
     return {
         "success": True,
         "message": f"测试成功（{resolved_model}）",
         "content_preview": output_text[:120],
     }
-
 
 @app.post("/webui/api/accounts/{account_id}/status")
 async def webui_refresh_account_status(account_id: str) -> dict[str, Any]:
@@ -529,12 +593,13 @@ async def chat_completions(request: ChatCompletionRequest):
     created = int(time.time())
 
     if not request.stream:
-        output_text, resolved_model = await invoker.run_text(
-            prompt=prompt.prompt,
-            attachments=prompt.attachments,
-            model=request.model,
-            max_tokens=request.max_tokens,
-        )
+        async with get_invocation_limiter().slot():
+            output_text, resolved_model = await invoker.run_text(
+                prompt=prompt.prompt,
+                attachments=prompt.attachments,
+                model=request.model,
+                max_tokens=request.max_tokens,
+            )
         return JSONResponse(
             content=_build_completion_response(
                 completion_id=completion_id,
@@ -548,72 +613,73 @@ async def chat_completions(request: ChatCompletionRequest):
     async def event_stream():
         resolved_model = request.model
         try:
-            iterator, resolved_model = await invoker.stream_events(
-                prompt=prompt.prompt,
-                attachments=prompt.attachments,
-                model=request.model,
-                max_tokens=request.max_tokens,
-            )
+            async with get_invocation_limiter().slot():
+                iterator, resolved_model = await invoker.stream_events(
+                    prompt=prompt.prompt,
+                    attachments=prompt.attachments,
+                    model=request.model,
+                    max_tokens=request.max_tokens,
+                )
 
-            finish_reason = "stop"
+                finish_reason = "stop"
 
-            yield _sse_payload(
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": resolved_model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"role": "assistant"},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-            )
+                yield _sse_payload(
+                    {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": resolved_model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant"},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
 
-            async for stream_event in iterator:
-                if stream_event.finish_reason:
-                    finish_reason = stream_event.finish_reason
+                async for stream_event in iterator:
+                    if stream_event.finish_reason:
+                        finish_reason = stream_event.finish_reason
 
-                if not stream_event.text_delta:
-                    continue
-                for index in range(0, len(stream_event.text_delta), get_settings().stream_chunk_chars):
-                    piece = stream_event.text_delta[
-                        index : index + get_settings().stream_chunk_chars
-                    ]
-                    yield _sse_payload(
-                        {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": resolved_model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {"content": piece},
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                    )
+                    if not stream_event.text_delta:
+                        continue
+                    for index in range(0, len(stream_event.text_delta), get_settings().stream_chunk_chars):
+                        piece = stream_event.text_delta[
+                            index : index + get_settings().stream_chunk_chars
+                        ]
+                        yield _sse_payload(
+                            {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": resolved_model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"content": piece},
+                                        "finish_reason": None,
+                                    }
+                                ],
+                            }
+                        )
 
-            yield _sse_payload(
-                {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": resolved_model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": finish_reason,
-                        }
-                    ],
-                }
-            )
+                yield _sse_payload(
+                    {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": resolved_model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": finish_reason,
+                            }
+                        ],
+                    }
+                )
         except QoderCLIError as exc:
             yield _sse_payload(
                 {
@@ -627,7 +693,6 @@ async def chat_completions(request: ChatCompletionRequest):
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
-
 
 def main() -> None:
     """CLI 入口。"""

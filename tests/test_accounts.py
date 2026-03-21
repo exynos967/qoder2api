@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from qoder2api.accounts import (
+    QoderAccount,
+    QoderAccountPool,
     build_legacy_account,
     create_pending_managed_account,
     finalize_pending_account,
@@ -71,3 +73,17 @@ def test_create_finalize_and_remove_managed_account(tmp_path: Path) -> None:
 
     assert remove_account(settings, pending.id) is True
     assert list_accounts(settings) == []
+
+
+def test_account_pool_pick_account_round_robin(monkeypatch, tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    pool = QoderAccountPool(settings)
+    account_a = QoderAccount(id="acct-a", label="账号 A", qoder_home=str(tmp_path / "acct-a"))
+    account_b = QoderAccount(id="acct-b", label="账号 B", qoder_home=str(tmp_path / "acct-b"))
+
+    monkeypatch.setattr(pool, "get_enabled_accounts", lambda: [account_a, account_b])
+
+    assert pool.pick_account().id == "acct-a"
+    assert pool.pick_account().id == "acct-b"
+    assert pool.pick_account().id == "acct-a"
+    assert pool.pick_account(preferred_account_id="acct-b").id == "acct-b"
