@@ -12,7 +12,7 @@ services:
       QODER2API_BROWSER_LOGIN_BACKEND: namespaced
       QODER2API_QODER_HOME: /data/.qoder
       QODER2API_WORKSPACE: /data
-      QODER2API_NAMESPACED_LOGIN_SCRIPT: /opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py
+      QODER2API_NAMESPACED_LOGIN_SCRIPT: /opt/qoder-machine/qoder-machine/xieyi/qoder_pure_login.py
       QODER2API_NAMESPACED_LOGIN_OUTPUT_ROOT: /data/.qoder2api/xieyi
     volumes:
       - ./data:/data

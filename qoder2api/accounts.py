@@ -71,6 +71,8 @@ def load_device_metadata(qoder_home: Path) -> dict[str, str]:
         "machine_type": str(payload.get("machine_type") or "").strip(),
         "device_hostname": str(payload.get("hostname") or "").strip(),
         "device_mac": str(payload.get("mac") or "").strip(),
+        "output_dir": str(payload.get("output_dir") or "").strip(),
+        "summary_path": str(payload.get("summary_path") or "").strip(),
     }
 
 

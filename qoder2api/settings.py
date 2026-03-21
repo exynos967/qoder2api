@@ -124,17 +124,25 @@ def discover_web_endpoint(explicit: str | None = None) -> str:
     return explicit.strip() if explicit else _DEFAULT_WEB_ENDPOINT
 
 
+def _append_unique_candidate(candidates: list[Path], candidate: Path) -> None:
+    if candidate not in candidates:
+        candidates.append(candidate)
+
+
 def discover_namespaced_login_script(explicit: str | None = None) -> Path:
-    """发现 namespaced 官方登录工作流脚本。"""
+    """发现 namespaced 纯协议登录工作流脚本。"""
     if explicit:
         return Path(explicit).expanduser().resolve()
 
-    candidates = [Path("/opt/qoder-machine/qoder-machine/qoder_namespaced_login.py")]
+    candidates = [Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_login.py")]
     current_file = Path(__file__).resolve()
+    relative_candidates = (
+        Path("vendor") / "qoder-machine" / "qoder-machine" / "xieyi" / "qoder_pure_login.py",
+        Path("machine") / "qoder-machine" / "xieyi" / "qoder_pure_login.py",
+    )
     for base in (current_file.parent, *current_file.parents):
-        candidate = base / "machine" / "qoder-machine" / "qoder_namespaced_login.py"
-        if candidate not in candidates:
-            candidates.append(candidate)
+        for relative in relative_candidates:
+            _append_unique_candidate(candidates, base / relative)
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()

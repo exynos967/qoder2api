@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from qoder2api import app as app_module
+from qoder2api.account_status import AccountStatusSnapshot, save_account_status
 from qoder2api.accounts import QoderAccount
 from qoder2api.auth_state import CachedUserInfo
 from qoder2api.login import BrowserLoginSnapshot, QoderLoginError, QoderLoginManager
@@ -243,6 +244,20 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
+    save_account_status(
+        qoder_home,
+        AccountStatusSnapshot(
+            uid="user-1",
+            email="demo@example.com",
+            user_type="personal_professional_trial",
+            user_tag="Pro Trial",
+            plan_tier_name="Pro Trial",
+            is_quota_exceeded=False,
+            checked_at="2026-03-21T21:24:05+08:00",
+            source="namespaced_summary",
+        ),
+    )
+
     settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
     snapshot = BrowserLoginSnapshot(
         session_id="demo-session",
@@ -281,6 +296,8 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     assert overview_data["accounts"]["accounts"][0]["label"] == "测试账号"
     assert overview_data["accounts"]["accounts"][0]["machine_token"] == "P1gA-demo-token"
     assert overview_data["accounts"]["accounts"][0]["machine_type"] == "4e4a13f491a127292e"
+    assert overview_data["accounts"]["accounts"][0]["plan_tier_name"] == "Pro Trial"
+    assert overview_data["accounts"]["accounts"][0]["is_quota_exceeded"] is False
 
     logs_data = asyncio.run(app_module.webui_logs(lines=100))
     assert logs_data["exists"] is True
@@ -293,3 +310,41 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     assert "qoder2api 管理后台" in index_html
     assert "Infer Endpoint" in index_html
     assert "const OVERVIEW_API = '/webui/api/overview';" in js_text
+
+
+def test_webui_refresh_account_status_route(monkeypatch, tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    account = QoderAccount(
+        id="acct-1",
+        label="测试账号",
+        enabled=True,
+        managed=True,
+        status="ready",
+        auth_type="qoder-browser",
+        qoder_home=str(qoder_home),
+        machine_id="1234567890abcdef-demo-machine",
+    )
+
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_module, "get_account", lambda *_args, **_kwargs: account)
+    monkeypatch.setattr(
+        app_module,
+        "refresh_account_status",
+        lambda *_args, **_kwargs: AccountStatusSnapshot(
+            uid="user-1",
+            email="demo@example.com",
+            user_type="personal_professional_trial",
+            user_tag="Pro Trial",
+            plan_tier_name="Pro Trial",
+            is_quota_exceeded=False,
+            checked_at="2026-03-21T21:24:05+08:00",
+            source="live_query",
+        ),
+    )
+
+    payload = asyncio.run(app_module.webui_refresh_account_status(account.id))
+
+    assert payload["success"] is True
+    assert payload["status"]["plan_tier_name"] == "Pro Trial"
+    assert payload["message"].startswith("账号状态已刷新")

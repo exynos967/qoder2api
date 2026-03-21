@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import selectors
-import shutil
 import subprocess
 import sys
 import time
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
+from .account_status import persist_summary_account_status
 from .auth_state import (
     CachedUserInfo,
     ensure_auth_dir,
@@ -57,6 +57,12 @@ class NamespacedBrowserLoginClient:
 
     def create_browser_login(self, qoder_home: Path) -> NamespacedBrowserLoginContext:
         script_path = self.settings.namespaced_login_script_path
+        if script_path.name == "qoder_pure_batch_builder.py":
+            raise QoderAPIError(
+                "namespaced 登录脚本配置错误：请指向 qoder_pure_login.py，而不是 qoder_pure_batch_builder.py",
+                status_code=500,
+                error_type="configuration_error",
+            )
         if not script_path.is_file():
             raise QoderAPIError(
                 f"找不到 namespaced 登录脚本: {script_path}",
@@ -123,16 +129,9 @@ class NamespacedBrowserLoginClient:
             )
 
         summary = self._extract_summary_output(output_lines)
-        self._copy_auth_cache(qoder_home, context.work_dir)
+        info = self._persist_login_state(qoder_home=qoder_home, context=context, summary=summary)
         self._persist_device_identity(qoder_home=qoder_home, context=context, summary=summary)
-
-        info = load_cached_user_info(qoder_home)
-        if info is None:
-            raise QoderAPIError(
-                "namespaced 登录结束后未找到本地登录态",
-                status_code=502,
-                error_type="api_error",
-            )
+        persist_summary_account_status(qoder_home, summary)
         if not info.login_device_id:
             info.login_device_id = context.machine_id
             save_cached_user_info(qoder_home, info)
@@ -146,7 +145,6 @@ class NamespacedBrowserLoginClient:
             str(self.settings.namespaced_login_max_attempts),
             "--timeout",
             str(self.settings.namespaced_login_timeout_seconds),
-            "--dump-user-plan",
             "--json",
         ]
         output_root = self.settings.namespaced_login_output_root_path
@@ -294,19 +292,39 @@ class NamespacedBrowserLoginClient:
         return machine_id
 
     @staticmethod
-    def _copy_auth_cache(qoder_home: Path, work_dir: Path) -> None:
-        cache_dir = work_dir / "cache"
-        source_id = cache_dir / "id"
-        source_user = cache_dir / "user"
-        if not source_id.is_file() or not source_user.is_file():
+    def _persist_login_state(
+        *,
+        qoder_home: Path,
+        context: NamespacedBrowserLoginContext,
+        summary: dict[str, object],
+    ) -> CachedUserInfo:
+        payload = summary.get("cached_user_info")
+        if not isinstance(payload, dict):
             raise QoderAPIError(
-                f"namespaced 工作目录缺少登录缓存: {work_dir}",
+                "namespaced 登录脚本输出缺少 cached_user_info",
                 status_code=502,
                 error_type="api_error",
             )
-        auth_dir = ensure_auth_dir(qoder_home)
-        shutil.copy2(source_id, auth_dir / "id")
-        shutil.copy2(source_user, auth_dir / "user")
+        save_machine_id(qoder_home, context.machine_id)
+        try:
+            info = CachedUserInfo.model_validate(payload)
+        except Exception as exc:  # pragma: no cover - 只在外部脚本输出损坏时触发
+            raise QoderAPIError(
+                f"解析 cached_user_info 失败: {exc}",
+                status_code=502,
+                error_type="api_error",
+            ) from exc
+        if not info.login_device_id:
+            info.login_device_id = context.machine_id
+        save_cached_user_info(qoder_home, info)
+        stored = load_cached_user_info(qoder_home)
+        if stored is None:
+            raise QoderAPIError(
+                "namespaced 登录结束后未找到本地登录态",
+                status_code=502,
+                error_type="api_error",
+            )
+        return stored
 
     def _persist_device_identity(
         self,
@@ -318,7 +336,7 @@ class NamespacedBrowserLoginClient:
         device = summary.get("device") if isinstance(summary.get("device"), dict) else {}
         device_info = device.get("machine_info") if isinstance(device, dict) else {}
         payload = {
-            "workflow": "namespaced_qoder",
+            "workflow": "pure_protocol_login",
             "output_dir": str(summary.get("outputDir") or ""),
             "summary_path": self._build_summary_path(summary),
             "machine_id": context.machine_id,

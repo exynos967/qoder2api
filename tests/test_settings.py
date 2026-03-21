@@ -58,10 +58,10 @@ def test_browser_login_backend_defaults_to_namespaced_and_respects_override(tmp_
     assert override.browser_login_backend_name == "direct"
 
 
-def test_discover_namespaced_login_script_defaults_to_namespaced_login() -> None:
+def test_discover_namespaced_login_script_defaults_to_pure_login() -> None:
     script_path = discover_namespaced_login_script()
 
-    assert script_path.name == "qoder_namespaced_login.py"
+    assert script_path.name == "qoder_pure_login.py"
 
 
 def test_discover_namespaced_login_script_handles_installed_shallow_path(
@@ -71,4 +71,18 @@ def test_discover_namespaced_login_script_handles_installed_shallow_path(
 
     script_path = discover_namespaced_login_script()
 
-    assert script_path == Path("/opt/qoder-machine/qoder-machine/qoder_namespaced_login.py")
+    assert script_path == Path("/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_login.py")
+
+
+def test_discover_namespaced_login_script_prefers_repo_vendor(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    qoder_package = repo_root / "qoder2api"
+    vendor_script = repo_root / "vendor" / "qoder-machine" / "qoder-machine" / "xieyi" / "qoder_pure_login.py"
+    vendor_script.parent.mkdir(parents=True)
+    vendor_script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    monkeypatch.setattr(settings_module, "__file__", str(qoder_package / "settings.py"))
+
+    script_path = discover_namespaced_login_script()
+
+    assert script_path == vendor_script.resolve()

@@ -7,6 +7,7 @@ import json
 import random
 import string
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ XXH64_PRIME2 = 0xC2B2AE3D27D4EB4F
 XXH64_PRIME3 = 0x165667B19E3779F9
 XXH64_PRIME4 = 0x85EBCA77C2B2AE63
 XXH64_PRIME5 = 0x27D4EB2F165667C5
+MACHINE_ID_SEED_ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase
 
 
 @dataclass(slots=True)
@@ -27,6 +29,7 @@ class PureDeviceResult:
     attempt: int
     ec: int
     success: bool
+    machine_id: str
     machine_token: str
     machine_type: str
     mac: str
@@ -52,6 +55,31 @@ def random_mac(rng: random.Random) -> str:
 def random_hostname(prefix: str, rng: random.Random, attempt: int) -> str:
     suffix = "".join(rng.choice(string.ascii_lowercase + string.digits) for _ in range(6))
     return f"{prefix}-{attempt:03d}-{suffix}"
+
+
+def official_machine_id_seed(rng: random.Random, length: int = 20) -> str:
+    return "".join(rng.choice(MACHINE_ID_SEED_ALPHABET) for _ in range(length))
+
+
+def add_system_mark(seed: str) -> str:
+    if len(seed) < 13:
+        raise ValueError(f"machine id seed 长度不足: {len(seed)}")
+    return f"{seed[:7]}-{seed[7:10]}l{seed[10:13]}-{seed[13:]}"
+
+
+def encode_machine_id(seed: str) -> str:
+    marked = add_system_mark(seed)
+    reader_bytes = marked.encode("utf-8")[: len(seed)]
+    if len(reader_bytes) < 16:
+        raise ValueError(f"machine id reader 长度不足: {len(reader_bytes)}")
+    raw = bytearray(reader_bytes[:16])
+    raw[6] = (raw[6] & 0x0F) | 0x40
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(raw)))
+
+
+def build_machine_id(rng: random.Random) -> str:
+    return encode_machine_id(official_machine_id_seed(rng))
 
 
 def rotl64(value: int, shift: int) -> int:
@@ -170,6 +198,7 @@ def write_csv(path: Path, results: list[PureDeviceResult]) -> None:
         "attempt",
         "ec",
         "success",
+        "machine_id",
         "machine_token",
         "machine_type",
         "mac",
@@ -199,6 +228,7 @@ def run_attempt(
 ) -> PureDeviceResult:
     mac = random_mac(rng).replace(":", "")
     hostname = random_hostname(hostname_prefix, rng, attempt)
+    machine_id = build_machine_id(rng)
     now_ms = int(time.time() * 1000)
     persisted_timestamp_ms = now_ms - rng.randint(persisted_min_ms, persisted_max_ms)
     response_path = output_dir / "responses" / f"device_{attempt:04d}.json"
@@ -220,6 +250,7 @@ def run_attempt(
                 attempt=attempt,
                 ec=ec,
                 success=False,
+                machine_id=machine_id,
                 machine_token="",
                 machine_type="",
                 mac=mac,
@@ -234,6 +265,7 @@ def run_attempt(
             attempt=attempt,
             ec=ec,
             success=True,
+            machine_id=machine_id,
             machine_token=machine_token,
             machine_type=build_machine_type(machine_token, 91),
             mac=mac,
@@ -247,6 +279,7 @@ def run_attempt(
             attempt=attempt,
             ec=-1,
             success=False,
+            machine_id=machine_id,
             machine_token="",
             machine_type="",
             mac=mac,

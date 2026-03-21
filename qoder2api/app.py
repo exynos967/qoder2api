@@ -25,6 +25,7 @@ from .accounts import (
     update_account_enabled,
     update_account_label,
 )
+from .account_status import load_account_status, refresh_account_status
 from .auth_state import inspect_local_auth
 from .catalog import QoderModelInfo, load_qoder_models
 from .login import QoderLoginError, QoderLoginManager
@@ -227,6 +228,7 @@ def _build_auth_status_payload() -> dict[str, Any]:
 def _serialize_account(account: QoderAccount) -> dict[str, Any]:
     auth_state = inspect_local_auth(account.qoder_home_path)
     device_metadata = load_device_metadata(account.qoder_home_path)
+    status_snapshot = load_account_status(account.qoder_home_path)
     model_count = (
         len(load_qoder_models(account.qoder_home_path, scene=get_settings().model_scene))
         if auth_state.get("logged_in_hint")
@@ -250,6 +252,37 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
         "logged_in_hint": auth_state.get("logged_in_hint", False),
         "has_machine_id": auth_state.get("has_machine_id", False),
         "has_user_file": auth_state.get("has_user_file", False),
+        "name": auth_state.get("name", ""),
+        "email": auth_state.get("email", ""),
+        "user_type": (
+            status_snapshot.user_type
+            if status_snapshot is not None and status_snapshot.user_type
+            else auth_state.get("user_type", "")
+        ),
+        "user_tag": (
+            status_snapshot.user_tag
+            if status_snapshot is not None and status_snapshot.user_tag
+            else auth_state.get("user_tag", "")
+        ),
+        "plan_tier_name": status_snapshot.plan_tier_name if status_snapshot else "",
+        "plan_user_type": status_snapshot.plan_user_type if status_snapshot else "",
+        "is_quota_exceeded": (
+            status_snapshot.is_quota_exceeded if status_snapshot else None
+        ),
+        "cloud_type": status_snapshot.cloud_type if status_snapshot else "",
+        "status_checked_at": status_snapshot.checked_at if status_snapshot else "",
+        "status_source": status_snapshot.source if status_snapshot else "",
+        "status_error": status_snapshot.status_error if status_snapshot else "",
+        "status_summary_path": (
+            status_snapshot.summary_path
+            if status_snapshot and status_snapshot.summary_path
+            else device_metadata.get("summary_path", "")
+        ),
+        "status_output_dir": (
+            status_snapshot.output_dir
+            if status_snapshot and status_snapshot.output_dir
+            else device_metadata.get("output_dir", "")
+        ),
         "model_count": model_count,
         "created_at": account.created_at,
         "updated_at": account.updated_at,
@@ -418,6 +451,29 @@ async def webui_test_account(account_id: str) -> dict[str, Any]:
         "success": True,
         "message": f"测试成功（{resolved_model}）",
         "content_preview": output_text[:120],
+    }
+
+
+@app.post("/webui/api/accounts/{account_id}/status")
+async def webui_refresh_account_status(account_id: str) -> dict[str, Any]:
+    account = get_account(get_settings(), account_id)
+    if account is None:
+        raise QoderLoginError(f"找不到账号: {account_id}", status_code=404)
+    if not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
+        raise QoderLoginError("账号当前没有可用登录态，无法检测状态", status_code=400)
+
+    try:
+        snapshot = refresh_account_status(get_settings(), account.qoder_home_path)
+    except Exception as exc:
+        raise QoderLoginError(f"检测账号状态失败: {exc}", status_code=502) from exc
+
+    refreshed_account = get_account(get_settings(), account_id) or account
+    label = snapshot.plan_tier_name or snapshot.user_tag or snapshot.user_type or "unknown"
+    return {
+        "success": True,
+        "message": f"账号状态已刷新：{label}",
+        "account": _serialize_account(refreshed_account),
+        "status": snapshot.model_dump(exclude_none=True),
     }
 
 

@@ -186,7 +186,25 @@ function buildAccountStatusText(account) {
     if (account.status) {
         flags.push(account.status);
     }
+    if (account.status_error) {
+        flags.push('状态异常');
+    }
     return flags.join(' / ');
+}
+
+function buildAccountCapabilityText(account) {
+    const planText = account.plan_tier_name || account.user_tag || account.user_type || '未检测';
+    const emailText = account.email || '--';
+    const quotaText = account.is_quota_exceeded === true
+        ? '额度受限'
+        : (account.is_quota_exceeded === false ? '额度正常' : '额度未知');
+    const checkedText = account.status_checked_at || '--';
+    return {
+        planText,
+        emailText,
+        quotaText,
+        checkedText,
+    };
 }
 
 function renderAccountsTable(accounts) {
@@ -203,7 +221,9 @@ function renderAccountsTable(accounts) {
         const machineIdText = account.machine_id ? `<div class="table-secondary-text mono-inline">machine_id: ${escapeHtml(account.machine_id)}</div>` : '';
         const authDirText = `<div class="table-secondary-text mono-inline">${escapeHtml(account.qoder_home)}</div>`;
         const actions = [];
+        const capability = buildAccountCapabilityText(account);
 
+        actions.push(`<button type="button" class="btn btn-secondary btn-sm" data-action="detect" data-account-id="${account.id}" ${(!account.logged_in_hint) ? 'disabled' : ''}>检测状态</button>`);
         actions.push(`<button type="button" class="btn btn-secondary btn-sm" data-action="test" data-account-id="${account.id}" ${(!account.enabled || !account.logged_in_hint) ? 'disabled' : ''}>测试</button>`);
 
         if (account.managed) {
@@ -225,8 +245,9 @@ function renderAccountsTable(accounts) {
                 ${authDirText}
             </td>
             <td>
-                <div class="table-primary-text">模型 ${escapeHtml(String(account.model_count ?? 0))} 个</div>
-                <div class="table-secondary-text">创建：${escapeHtml(account.created_at || '--')}</div>
+                <div class="table-primary-text">${escapeHtml(capability.planText)}</div>
+                <div class="table-secondary-text">${escapeHtml(capability.emailText)} · ${escapeHtml(capability.quotaText)}</div>
+                <div class="table-secondary-text">模型 ${escapeHtml(String(account.model_count ?? 0))} 个 · 检测：${escapeHtml(capability.checkedText)}</div>
             </td>
             <td class="account-actions-cell">
                 <div class="account-actions-group">${actions.join('')}</div>
@@ -414,6 +435,15 @@ async function testAccount(accountId) {
     showToast(result.message ? `${result.message}${preview}` : '账号测试成功', 'success');
 }
 
+async function refreshAccountStatus(accountId) {
+    const result = await apiRequest(`${ACCOUNTS_API}/${accountId}/status`, {
+        method: 'POST',
+        body: '{}',
+    });
+    showToast(result.message || '账号状态已刷新', 'success');
+    await Promise.all([loadOverview(), loadAccounts()]);
+}
+
 async function deleteAccount(accountId) {
     if (!window.confirm('确定要删除这个账号吗？')) {
         return;
@@ -518,6 +548,8 @@ async function handleAccountsTableClick(event) {
     try {
         if (action === 'toggle') {
             await toggleAccount(accountId, button.dataset.enabled === '1');
+        } else if (action === 'detect') {
+            await refreshAccountStatus(accountId);
         } else if (action === 'test') {
             await testAccount(accountId);
         } else if (action === 'delete') {

@@ -9,6 +9,7 @@
 - OpenAI 兼容接口：`/v1/models`、`/v1/chat/completions`
 - WebUI 管理界面：`/webui`
 - Qoder 账号池：网页登录入池、启停、改名、删除、测试
+- 账号状态检测：展示并刷新 `user/status` / `user/plan`，区分 `Pro Trial`、`Free` 与额度状态
 - 默认走镜像内置的 `xieyi` 纯协议登录前置工作流
 - 登录态与账号池持久化：`./data`
 - GHCR 镜像自动构建：`ghcr.io/exynos967/qoder2api`
@@ -33,7 +34,7 @@ ghcr.io/exynos967/qoder2api:edge
 并自动配置：
 
 - `QODER2API_BROWSER_LOGIN_BACKEND=namespaced`
-- `QODER2API_NAMESPACED_LOGIN_SCRIPT=/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py`
+- `QODER2API_NAMESPACED_LOGIN_SCRIPT=/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_login.py`
 - `QODER2API_NAMESPACED_LOGIN_OUTPUT_ROOT=/data/.qoder2api/xieyi`
 
 也就是说，**镜像本身已经内置了纯协议工作流**，不再依赖宿主机额外挂载 `qoder-machine` 目录，也不再依赖 `Qoder` 二进制。
@@ -46,11 +47,11 @@ ghcr.io/exynos967/qoder2api:edge
 
 此时每次登录都会按下面链路执行：
 
-1. `qoder2api` 先调用镜像内的 `/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py`
-2. `xieyi` 纯协议生成新的设备身份（`machine_token / machine_type / mac / hostname`）
-3. `qoder2api` 再创建官方网页登录地址
+1. `qoder2api` 先调用镜像内的 `/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_login.py`
+2. `xieyi` 纯协议脚本内部先生成新的设备身份（`machine_token / machine_type / mac / hostname`）
+3. 脚本再创建官方网页登录地址，并在登录成功后继续轮询 `user/status`、`user/plan` 直到 Trial 状态收敛
 4. WebUI 打开登录页
-5. 登录成功后，结果写回当前账号池的 `.qoder/.auth/*`
+5. 登录成功后，结果写回当前账号池的 `.qoder/.auth/*`，并额外保存账号套餐状态，支持在账号池里继续“检测状态”
 
 ### 3. 使用 API
 
@@ -107,7 +108,7 @@ docker compose up -d --force-recreate
 | `QODER2API_BROWSER_LOGIN_BACKEND` | 登录后端 | `namespaced` |
 | `QODER2API_QODER_HOME` | `.qoder` 路径 | `/data/.qoder` |
 | `QODER2API_WORKSPACE` | 工作目录 | `/data` |
-| `QODER2API_NAMESPACED_LOGIN_SCRIPT` | `xieyi` 纯协议脚本路径 | `/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_batch_builder.py` |
+| `QODER2API_NAMESPACED_LOGIN_SCRIPT` | `xieyi` 纯协议脚本路径 | `/opt/qoder-machine/qoder-machine/xieyi/qoder_pure_login.py` |
 | `QODER2API_NAMESPACED_LOGIN_OUTPUT_ROOT` | `xieyi` 输出根目录 | `/data/.qoder2api/xieyi` |
 | `QODER2API_QODER_INFER_ENDPOINT` | 推理入口 | 自动发现 |
 | `QODER2API_QODER_OPENAPI_ENDPOINT` | OpenAPI 入口 | `https://openapi.qoder.sh` |
