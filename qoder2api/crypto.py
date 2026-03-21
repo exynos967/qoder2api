@@ -13,8 +13,9 @@ from cryptography.hazmat.primitives import padding, serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-_AUTH_VERSION = "v12-v2ga-rtogteq__[]%X+1%f0x])ts"
+_AUTH_VERSION = "v1"
 _DEFAULT_CLIENT_VERSION = "0.1.32"
+_DEFAULT_COSY_VERSION = "0.14.2"
 _RSA_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 4k6Pz1EaDicBMpdpxKduSZu5OANqUq8er4GM95omAGIOPOh+Nx0spthYA2BqGz+l
@@ -106,14 +107,17 @@ def build_auth_payload(
     ide_version: str = "",
     client_version: str = _DEFAULT_CLIENT_VERSION,
     request_id: str | None = None,
+    cosy_version: str = _DEFAULT_COSY_VERSION,
+    version: str = _AUTH_VERSION,
 ) -> str:
-    """构造 COSY payload，并按 Qoder 规则再做 base64。"""
+    """构造官方 COSY payload，并按 Qoder 规则做 base64。"""
+    del client_version  # 兼容旧调用签名；官方 infer 鉴权不再使用该字段。
     raw = {
-        "version": _AUTH_VERSION,
-        "requestId": request_id or str(uuid.uuid4()),
-        "info": encrypt_user_info,
-        "cli_version": client_version,
+        "cosyVersion": cosy_version,
         "ideVersion": ide_version,
+        "info": encrypt_user_info,
+        "requestId": request_id or str(uuid.uuid4()),
+        "version": version,
     }
     encoded = json.dumps(raw, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return base64.b64encode(encoded).decode("utf-8")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -20,6 +21,7 @@ from .auth_state import (
     ensure_auth_fields,
     ensure_machine_id,
     load_cached_user_info,
+    load_machine_id,
     merge_refreshed_tokens,
     save_machine_id,
     save_cached_user_info,
@@ -40,6 +42,14 @@ _LOGIN_REFRESH_PATH = "/api/v1/deviceToken/refresh"
 _USERINFO_PATH = "/api/v1/userinfo"
 _LOGIN_TIMEOUT_SECONDS = 300
 _REFRESH_SKEW_MS = 30_000
+_OFFICIAL_COSY_VERSION = "0.14.2"
+_OFFICIAL_CLIENT_IP = "10.20.2.2"
+_OFFICIAL_MACHINE_OS = "x86_64_linux"
+_OFFICIAL_CLIENT_TYPE = "2"
+_OFFICIAL_LOGIN_VERSION = "v2"
+_OFFICIAL_DATA_POLICY = "DISAGREE"
+_OFFICIAL_CHAT_USER_AGENT = "Go-http-client/2.0"
+_DEVICE_METADATA_NAME = "xieyi_device.json"
 
 
 class QoderAPIError(RuntimeError):
@@ -399,6 +409,7 @@ class QoderAPIClient:
         )
         body_text = json.dumps(request_body, ensure_ascii=False, separators=(",", ":"))
         headers = self.build_chat_headers(
+            qoder_home=qoder_home,
             cached_user=cached,
             body_text=body_text,
             path=_CHAT_PATH,
@@ -474,11 +485,21 @@ class QoderAPIClient:
     def build_chat_headers(
         self,
         *,
+        qoder_home: Path,
         cached_user: CachedUserInfo,
         body_text: str,
         path: str,
     ) -> dict[str, str]:
         date = str(int(time.time()))
+        body_bytes = body_text.encode("utf-8")
+        body_hash = hashlib.md5(body_bytes).hexdigest()
+        metadata = self._load_device_metadata(qoder_home)
+        machine_id = load_machine_id(qoder_home) or cached_user.login_device_id
+        organization_tags = ",".join(
+            str(tag).strip()
+            for tag in (cached_user.organization_tags or [])
+            if str(tag).strip()
+        )
         _, bearer_token = build_bearer_token(
             encrypt_user_info=cached_user.encrypt_user_info,
             key=cached_user.key,
@@ -488,12 +509,28 @@ class QoderAPIClient:
             client_version=self.settings.client_version,
         )
         return {
-            **self._base_headers(accept="text/event-stream"),
+            "Accept": "text/event-stream",
+            "Accept-Encoding": "identity",
             "Authorization": bearer_token,
-            "Cosy-User": cached_user.uid,
-            "Cosy-Key": cached_user.key,
-            "Cosy-Date": date,
             "Content-Type": "application/json",
+            "Cosy-Version": _OFFICIAL_COSY_VERSION,
+            "Cosy-Key": cached_user.key,
+            "Cosy-Organization-Id": cached_user.organization_id,
+            "Cosy-Organization-Tags": organization_tags,
+            "Cosy-BodyLength": str(len(body_bytes)),
+            "Cosy-BodyHash": body_hash,
+            "Cosy-Data-Policy": _OFFICIAL_DATA_POLICY,
+            "Cosy-Date": date,
+            "Cosy-User": cached_user.uid,
+            "Cosy-MachineId": machine_id,
+            "Cosy-MachineOS": _OFFICIAL_MACHINE_OS,
+            "Cosy-MachineToken": metadata.get("machine_token", ""),
+            "Cosy-MachineType": metadata.get("machine_type", ""),
+            "Cosy-ClientIp": _OFFICIAL_CLIENT_IP,
+            "Cosy-ClientType": _OFFICIAL_CLIENT_TYPE,
+            "Login-Version": _OFFICIAL_LOGIN_VERSION,
+            "Cosy-SigPath": path.split("?", 1)[0],
+            "User-Agent": _OFFICIAL_CHAT_USER_AGENT,
         }
 
     def _base_headers(self, *, accept: str) -> dict[str, str]:
@@ -501,6 +538,21 @@ class QoderAPIClient:
             "Accept": accept,
             "Content-Type": "application/json",
             "User-Agent": self.user_agent,
+        }
+
+    def _load_device_metadata(self, qoder_home: Path) -> dict[str, str]:
+        metadata_path = qoder_home / ".auth" / _DEVICE_METADATA_NAME
+        if not metadata_path.is_file():
+            return {}
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            "machine_token": str(payload.get("machine_token") or "").strip(),
+            "machine_type": str(payload.get("machine_type") or "").strip(),
         }
 
     def _extract_error_message(self, text: str) -> str:

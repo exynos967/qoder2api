@@ -1,11 +1,14 @@
 import asyncio
+import base64
+import json
 from pathlib import Path
 
 import httpx
 
-from qoder2api.auth_state import load_cached_user_info
+from qoder2api.auth_state import load_cached_user_info, load_machine_id
 from qoder2api.qoder_api import QoderAPIClient
 from qoder2api.settings import Settings
+from tests.helpers import prepare_qoder_home
 
 
 def _make_client(
@@ -126,3 +129,48 @@ def test_complete_browser_login_writes_local_auth(tmp_path: Path) -> None:
     assert stored.login_device_id == context.machine_id
     assert stored.key
     assert any("登录成功" in item for item in progress)
+
+
+def test_build_chat_headers_matches_official_qoder_shape(tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    auth_dir = qoder_home / ".auth"
+    (auth_dir / "xieyi_device.json").write_text(
+        json.dumps(
+            {
+                "machine_token": "machine-token-demo",
+                "machine_type": "machine-type-demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+    cached = load_cached_user_info(qoder_home)
+    assert cached is not None
+
+    headers = client.build_chat_headers(
+        qoder_home=qoder_home,
+        cached_user=cached,
+        body_text='{"demo":true}',
+        path='/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1',
+    )
+
+    assert headers['User-Agent'] == 'Go-http-client/2.0'
+    assert headers['Accept'] == 'text/event-stream'
+    assert headers['Accept-Encoding'] == 'identity'
+    assert headers['Cosy-Version'] == '0.14.2'
+    assert headers['Cosy-Data-Policy'] == 'DISAGREE'
+    assert headers['Cosy-SigPath'] == '/algo/api/v2/service/pro/sse/agent_chat_generation'
+    assert headers['Cosy-MachineId'] == load_machine_id(qoder_home)
+    assert headers['Cosy-MachineToken'] == 'machine-token-demo'
+    assert headers['Cosy-MachineType'] == 'machine-type-demo'
+    assert headers['Cosy-BodyLength'] == str(len('{"demo":true}'.encode('utf-8')))
+
+    _, payload_b64, signature = headers['Authorization'].split('.', 2)
+    assert signature
+    payload = json.loads(base64.b64decode(payload_b64).decode('utf-8'))
+    assert payload['cosyVersion'] == '0.14.2'
+    assert payload['version'] == 'v1'
+    assert payload['info'] == cached.encrypt_user_info
+    assert 'cli_version' not in payload

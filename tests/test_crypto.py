@@ -35,7 +35,9 @@ def test_build_auth_payload_is_base64_json() -> None:
 
     assert decoded["requestId"] == "req-1"
     assert decoded["info"] == "encrypted-user"
-    assert decoded["cli_version"] == "0.1.32"
+    assert decoded["cosyVersion"] == "0.14.2"
+    assert decoded["version"] == "v1"
+    assert "cli_version" not in decoded
 
 
 def test_generate_auth_fields_returns_cipher_and_rsa_key() -> None:
