@@ -20,8 +20,23 @@ class QoderModelInfo:
     is_reasoning: bool = False
     price_factor: float = 0.0
 
+    @property
+    def public_id(self) -> str:
+        return _normalize_public_id(self.id, self.display_name)
+
 
 _DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
+_PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax M2.7"}
+
+
+def _normalize_public_id(model_id: str, display_name: str) -> str:
+    override = _PUBLIC_ID_OVERRIDES.get(model_id)
+    if override:
+        return override
+
+    candidate = display_name or model_id
+    normalized = " ".join(candidate.replace("_", " ").replace("-", " ").split())
+    return normalized or model_id
 
 
 _FALLBACK_MODELS = [
@@ -82,13 +97,25 @@ def load_qoder_models(qoder_home: Path, scene: str = "chat") -> list[QoderModelI
     return parsed_models or list(_FALLBACK_MODELS)
 
 
+def _register_alias(aliases: dict[str, str], alias: str, target: str) -> None:
+    normalized = alias.strip().lower()
+    if normalized:
+        aliases[normalized] = target
+
+
 def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
-    """构建模型 ID/展示名到 CLI key 的映射。"""
+    """构建外部模型名到 Qoder 内部 key 的映射。"""
     aliases: dict[str, str] = {}
     for model in models:
-        aliases[model.id.lower()] = model.id
-        aliases[model.display_name.lower()] = model.id
-        aliases[f"qoder/{model.id}".lower()] = model.id
+        for alias in (
+            model.id,
+            model.display_name,
+            model.public_id,
+            f"qoder/{model.id}",
+            f"qoder/{model.display_name}",
+            f"qoder/{model.public_id}",
+        ):
+            _register_alias(aliases, alias, model.id)
     return aliases
 
 
@@ -106,6 +133,5 @@ def resolve_model_name(
     if candidate in aliases:
         return aliases[candidate]
 
-    raise ValueError(
-        f"不支持的 model: {requested_model}；可选值: {', '.join(model.id for model in models)}"
-    )
+    available = ", ".join(dict.fromkeys(model.public_id for model in models))
+    raise ValueError(f"不支持的 model: {requested_model}；可选值: {available}")

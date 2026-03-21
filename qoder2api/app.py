@@ -114,14 +114,15 @@ def _build_log_config(settings: Settings) -> dict[str, Any]:
 
 def _model_to_openai_item(model: QoderModelInfo) -> dict[str, Any]:
     return {
-        "id": model.id,
+        "id": model.public_id,
         "object": "model",
         "created": 0,
         "owned_by": "qoder",
         "permission": [],
-        "root": model.id,
+        "root": model.public_id,
         "parent": None,
         "display_name": model.display_name,
+        "qoder_model_id": model.id,
         "context_window": model.max_input_tokens,
         "max_output_tokens": model.max_output_tokens,
         "is_reasoning": model.is_reasoning,
