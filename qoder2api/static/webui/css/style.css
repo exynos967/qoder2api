@@ -565,10 +565,11 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 .log-container {
   flex: 1;
   overflow: auto;
-  padding: 20px;
+  padding: 16px 20px;
   font-family: 'Fira Code', monospace;
   font-size: 13px;
-  height: 500px;
+  height: 320px;
+  max-height: 320px;
 }
 .log-container pre {
   white-space: pre;
