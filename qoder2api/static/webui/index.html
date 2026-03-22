@@ -38,9 +38,7 @@
                         <span class="icon-index">01</span>
                     </span>
                     <span class="nav-copy">
-                        <strong>仪表盘</strong>
-                        <small>运行健康与调度总览</small>
-                    </span>
+                        <strong>仪表盘</strong>                    </span>
                 </a>
                 <a href="#" class="nav-item" data-page="accounts">
                     <span class="icon-shell" aria-hidden="true">
@@ -54,7 +52,6 @@
                     </span>
                     <span class="nav-copy">
                         <strong>账号池</strong>
-                        <small>登录、检测与轮询管理</small>
                     </span>
                 </a>
                 <a href="#" class="nav-item" data-page="models">
@@ -68,7 +65,6 @@
                     </span>
                     <span class="nav-copy">
                         <strong>模型与设置</strong>
-                        <small>模型暴露与运行参数</small>
                     </span>
                 </a>
                 <a href="#" class="nav-item" data-page="playground">
@@ -82,7 +78,6 @@
                     </span>
                     <span class="nav-copy">
                         <strong>调试面板</strong>
-                        <small>兼容接口与输出验证</small>
                     </span>
                 </a>
                 <a href="#" class="nav-item" data-page="logs">
@@ -99,7 +94,6 @@
                     </span>
                     <span class="nav-copy">
                         <strong>日志追踪</strong>
-                        <small>服务日志与网页登录输出</small>
                     </span>
                 </a>
             </nav>
@@ -141,7 +135,7 @@
                             <div class="card-header dashboard-summary-header">
                                 <div>
                                     <span>实时概览</span>
-                                    <p class="section-intro">优先突出账号池可用性、并发占用与额度状态。</p>
+                                    <p class="section-intro">查看账号池可用情况、当前请求压力和额度剩余。</p>
                                 </div>
                                 <div class="header-actions">
                                     <span id="dashboard-concurrency-pill" class="table-badge tone-neutral">并发 --</span>
@@ -185,7 +179,7 @@
                                 <div class="card-header">
                                     <div>
                                         <span>系统状态</span>
-                                        <p class="section-intro">保留 app.js 已有运行指标，方便快速诊断。</p>
+                                        <p class="section-intro">查看服务是否正常、版本信息、代理状态和并发占用。</p>
                                     </div>
                                 </div>
                                 <div class="card-body">
@@ -218,7 +212,7 @@
                                 <div class="card-header">
                                     <div>
                                         <span>池监控摘要</span>
-                                        <p class="section-intro">以紧凑方式汇总账号池 readiness。</p>
+                                        <p class="section-intro">用更紧凑的方式汇总账号、模型和请求状态。</p>
                                     </div>
                                 </div>
                                 <div class="card-body">
@@ -247,7 +241,7 @@
                         <div class="card-header">
                             <div>
                                 <span>账号池</span>
-                                <p class="section-intro">每个账号对应独立的 <code>.qoder</code> 目录；请求默认从已启用账号里轮询调度。</p>
+                                <p class="section-intro">管理登录账号，查看状态，并执行启用、测试、改名和删除操作。</p>
                             </div>
                             <div class="header-actions">
                                 <button id="start-login-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>Oauth 登录</span></button>
@@ -292,7 +286,7 @@
                             <div class="card-header">
                                 <div>
                                     <span>模型列表</span>
-                                    <p class="section-intro">展示当前对外暴露的模型、上下文与价格信息。</p>
+                                    <p class="section-intro">查看当前可用模型，以及上下文和输出限制等信息。</p>
                                 </div>
                                 <div class="header-actions">
                                     <button id="models-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
@@ -322,7 +316,7 @@
                             <div class="card-header">
                                 <div>
                                     <span>运行设置</span>
-                                    <p class="section-intro">代理、llmapi Key 与账号池并发限制。</p>
+                                    <p class="section-intro">设置代理、llmapi Key 和账号池总并发限制。</p>
                                 </div>
                                 <div class="header-actions">
                                     <button id="settings-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
@@ -360,7 +354,7 @@
                             <div class="card-header">
                                 <div>
                                     <span>调试面板</span>
-                                    <p class="section-intro">直接调用 OpenAI Chat Completions 兼容接口验证账号池输出。</p>
+                                    <p class="section-intro">直接发送请求，检查当前模型返回内容和 token 使用情况。</p>
                                 </div>
                             </div>
                             <div class="card-body">
@@ -413,7 +407,7 @@
                             <div class="card-header">
                                 <div>
                                     <span>程序日志</span>
-                                    <p id="logs-meta" class="section-intro">日志加载中...</p>
+                                    <p id="logs-meta" class="section-intro" hidden aria-hidden="true">日志加载中...</p>
                                 </div>
                                 <div class="header-actions">
                                     <select id="logs-lines-select">
@@ -436,7 +430,7 @@
                             <div class="card-header">
                                 <div>
                                     <span>网页登录状态</span>
-                                    <p class="section-intro">展示当前登录流程输出和回调提示。</p>
+                                    <p class="section-intro">查看网页登录过程中的输出信息和状态变化。</p>
                                 </div>
                             </div>
                             <div class="card-body terminal-shell">

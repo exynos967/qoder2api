@@ -151,24 +151,23 @@ body {
 
 .nav-copy {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
 }
 
 .nav-copy strong {
   font-size: 14px;
   line-height: 1.2;
+  text-align: center;
 }
 
 .nav-copy small {
-  font-size: 11px;
-  color: var(--c-gray-400);
-  font-weight: 400;
-  margin-top: 2px;
+  display: none;
 }
 
 .nav-item.active .nav-copy small {
-  color: var(--c-primary-hover);
-  opacity: 0.8;
+  display: none;
 }
 
 .main-content {
@@ -270,6 +269,29 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+#logs-section .header-actions {
+  justify-content: flex-end;
+}
+
+#logs-section .header-actions > * {
+  flex-shrink: 0;
+}
+
+#logs-lines-select {
+  min-width: 92px;
+}
+
+#logs-autoscroll-btn,
+#logs-refresh-btn {
+  white-space: nowrap;
+}
+
+#logs-autoscroll-label {
+  display: inline-block;
+  white-space: nowrap;
 }
 
 /* Metrics Grid */
@@ -542,15 +564,17 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 }
 .log-container {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: 20px;
   font-family: 'Fira Code', monospace;
   font-size: 13px;
   height: 500px;
 }
 .log-container pre {
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  min-width: max-content;
   line-height: 1.6;
   color: #A3A3A3;
 }
