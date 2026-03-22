@@ -156,11 +156,6 @@
                                         <p class="hint">当前开放模型</p>
                                     </article>
                                     <article class="metric-tile">
-                                        <span class="metric-label">运行中请求</span>
-                                        <div id="dashboard-active-requests" class="big-number">0</div>
-                                        <p class="hint">并发上限 <span id="dashboard-concurrency-limit">--</span></p>
-                                    </article>
-                                    <article class="metric-tile">
                                         <span class="metric-label">账号池总额度</span>
                                         <div id="dashboard-quota-total" class="big-number">--</div>
                                         <p id="dashboard-quota-total-hint" class="hint">暂无额度数据</p>
@@ -197,7 +192,7 @@
                                             <strong id="dashboard-proxy-status">--</strong>
                                         </article>
                                         <article class="status-item">
-                                            <span class="status-label">llmapi Key</span>
+                                            <span class="status-label">API Key</span>
                                             <strong id="dashboard-llmapi-status">--</strong>
                                         </article>
                                         <article class="status-item">
@@ -223,9 +218,9 @@
                                         </div>
                                         <div class="monitor-grid">
                                             <div><span>账号</span><strong id="dashboard-monitor-accounts">0 / 0</strong></div>
-                                            <div><span>活跃请求</span><strong id="dashboard-monitor-active">0 req</strong></div>
-                                            <div><span>在线模型</span><strong id="dashboard-monitor-models">0 online</strong></div>
-                                            <div><span>llmapi</span><strong id="dashboard-monitor-llmapi">未配置</strong></div>
+                                            <div><span>活跃请求</span><strong id="dashboard-monitor-active">0</strong></div>
+                                            <div><span>在线模型</span><strong id="dashboard-monitor-models">0</strong></div>
+                                            <div><span>API Key</span><strong id="dashboard-monitor-llmapi">未配置</strong></div>
                                             <div><span>并发上限</span><strong id="dashboard-monitor-concurrency">--</strong></div>
                                             <div><span>代理</span><strong id="dashboard-monitor-proxy">未配置</strong></div>
                                         </div>
@@ -316,7 +311,7 @@
                             <div class="card-header">
                                 <div>
                                     <span>运行设置</span>
-                                    <p class="section-intro">设置代理、llmapi Key 和账号池总并发限制。</p>
+                                    <p class="section-intro">设置代理、API Key 和账号池总并发限制。</p>
                                 </div>
                                 <div class="header-actions">
                                     <button id="settings-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
@@ -329,7 +324,7 @@
                                         <input type="text" id="settings-proxy-url" placeholder="例如 http://127.0.0.1:7890">
                                     </div>
                                     <div class="form-group">
-                                        <label for="settings-llmapi-api-key">llmapi API Key</label>
+                                        <label for="settings-llmapi-api-key">API Key</label>
                                         <input type="password" id="settings-llmapi-api-key" placeholder="可选">
                                     </div>
                                     <div class="form-group">

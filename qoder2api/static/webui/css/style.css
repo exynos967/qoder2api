@@ -594,10 +594,15 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 }
 
 /* Dashboard detail */
-.dashboard-grid,
+.dashboard-grid {
+  display: grid;
+  gap: 24px;
+}
+
 .dashboard-detail-grid {
   display: grid;
   gap: 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .status-grid {
@@ -836,6 +841,6 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 
 @media (min-width: 1024px) {
   .dashboard-metrics-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }

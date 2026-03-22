@@ -391,8 +391,8 @@ function renderOverview(data) {
     setText('dashboard-proxy-pill', proxyConfigured ? '代理已配置' : '代理未配置');
     setText('dashboard-monitor-status', auth.logged_in_hint ? 'POOL READY' : 'WAITING AUTH');
     setText('dashboard-monitor-accounts', `${enabledAccounts} / ${totalAccounts}`);
-    setText('dashboard-monitor-active', `${activeRequests} req`);
-    setText('dashboard-monitor-models', `${Number(health.models || 0)} online`);
+    setText('dashboard-monitor-active', String(activeRequests));
+    setText('dashboard-monitor-models', String(Number(health.models || 0)));
     setText('dashboard-monitor-llmapi', llmapiConfigured ? '已配置' : '未配置');
     setText('dashboard-monitor-concurrency', String(concurrencyLimit));
     setText('dashboard-monitor-proxy', proxyConfigured ? '已配置' : '未配置');
@@ -660,7 +660,7 @@ function renderRuntimeSettings(payload) {
     setText('settings-runtime-path', payload?.path || '--');
     setText(
         'settings-runtime-status',
-        `当前生效并发 ${limit}，运行中 ${active}。代理${proxyConfigured ? '已配置' : '未配置'}，llmapi API Key${llmapiConfigured ? '已配置' : '未配置'}。`
+        `当前生效并发 ${limit}，运行中 ${active}。代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
     );
 
     setText('dashboard-concurrency-limit', String(limit));
