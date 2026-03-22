@@ -482,13 +482,12 @@ function renderModels(models) {
     tbody.innerHTML = '';
 
     if (!models.length) {
-        tbody.innerHTML = '<tr><td colspan="6">暂无模型</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5">暂无模型</td></tr>';
         return;
     }
 
     for (const model of models) {
         const tr = document.createElement('tr');
-        const reasoningTone = model.is_reasoning ? 'tone-success' : 'tone-muted';
         tr.innerHTML = `
             <td><span class="mono-inline">${escapeHtml(model.id)}</span></td>
             <td>
@@ -497,7 +496,6 @@ function renderModels(models) {
             <td>${Number(model.context_window || 0).toLocaleString()}</td>
             <td>${Number(model.max_output_tokens || 0).toLocaleString()}</td>
             <td>${escapeHtml(String(model.price_factor ?? '--'))}</td>
-            <td><span class="table-badge ${reasoningTone}">${model.is_reasoning ? 'Reasoning' : '标准'}</span></td>
         `;
         tbody.appendChild(tr);
     }
