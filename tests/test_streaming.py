@@ -204,3 +204,43 @@ def test_merge_tool_call_deltas_reconstructs_final_calls() -> None:
             },
         }
     ]
+
+
+def test_stream_json_parser_openai_chunk_message_content_fallback() -> None:
+    parser = QoderStreamJSONParser()
+
+    parsed = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "message": {"content": "OK"},
+                    "index": 0,
+                    "finish_reason": "stop",
+                }
+            ],
+            "object": "chat.completion",
+        }
+    )
+
+    assert parsed.text_delta == "OK"
+    assert parsed.finish_reason == "stop"
+
+
+def test_stream_json_parser_openai_chunk_text_fallback() -> None:
+    parser = QoderStreamJSONParser()
+
+    parsed = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "text": "GLM fallback",
+                    "index": 0,
+                    "finish_reason": "stop",
+                }
+            ],
+            "object": "chat.completion",
+        }
+    )
+
+    assert parsed.text_delta == "GLM fallback"
+    assert parsed.finish_reason == "stop"

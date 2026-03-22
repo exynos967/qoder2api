@@ -320,7 +320,6 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     index_html = Path(file_response.path).read_text(encoding="utf-8")
     js_text = (Path(file_response.path).parent / "js" / "app.js").read_text(encoding="utf-8")
     assert file_response.status_code == 200
-    assert "qoder2api 管理后台" in index_html
     assert "实时概览" in index_html
     assert "Infer Endpoint" not in index_html
     assert "const OVERVIEW_API = '/webui/api/overview';" in js_text

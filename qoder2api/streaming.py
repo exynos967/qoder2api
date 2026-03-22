@@ -147,6 +147,21 @@ def _extract_tool_call_deltas(delta_payload: Any) -> list[ToolCallDelta]:
     return normalized
 
 
+def _extract_openai_chunk_text(choice: dict[str, Any]) -> str:
+    delta_payload = choice.get("delta")
+    text = _join_text_blocks(delta_payload)
+    if text:
+        return text
+
+    for key in ("message", "content", "text", "output_text", "response"):
+        if key in choice:
+            text = _join_text_blocks(choice.get(key))
+            if text:
+                return text
+
+    return ""
+
+
 def _merge_chunk_text(current: str, chunk: str) -> str:
     if not chunk:
         return current
@@ -382,7 +397,9 @@ class QoderStreamJSONParser:
 
         first_choice = choices[0] if isinstance(choices[0], dict) else {}
         delta_payload = first_choice.get("delta")
-        event.text_delta = self._append_delta(message_id, _join_text_blocks(delta_payload))
+        event.text_delta = self._append_delta(message_id, _extract_openai_chunk_text(first_choice))
         event.tool_call_deltas = _extract_tool_call_deltas(delta_payload)
-        event.finish_reason = _normalize_finish_reason(first_choice.get("finish_reason"))
+        event.finish_reason = _normalize_finish_reason(
+            first_choice.get("finish_reason") or payload.get("finish_reason")
+        )
         return event
