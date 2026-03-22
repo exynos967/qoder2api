@@ -5,10 +5,13 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+from os.path import basename
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+
+import httpx
 
 from .schemas import ChatMessage
 
@@ -27,6 +30,8 @@ _COMMON_IMAGE_MIME_TYPES = {
     ".bmp": "image/bmp",
     ".svg": "image/svg+xml",
 }
+_REMOTE_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
 _INLINE_IMAGE_NAMES = {
     "image/jpeg": "inline-image.jpg",
     "image/png": "inline-image.png",
@@ -91,6 +96,40 @@ def _build_local_attachment(path: Path) -> PreparedAttachment:
     )
 
 
+
+
+def _build_remote_attachment(raw_url: str) -> PreparedAttachment:
+    parsed = urlparse(raw_url)
+    timeout = httpx.Timeout(20.0, connect=10.0)
+    with httpx.stream("GET", raw_url, follow_redirects=True, timeout=timeout) as response:
+        response.raise_for_status()
+        header_value = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        mime_type = header_value if header_value.startswith("image/") else ""
+        if not mime_type:
+            suffix = Path(unquote(parsed.path)).suffix.lower()
+            if suffix:
+                mime_type = _COMMON_IMAGE_MIME_TYPES.get(suffix, "")
+        if not mime_type.startswith("image/"):
+            raise ValueError("远程图片 URL 未返回可识别的 image/* Content-Type")
+
+        chunks: list[bytes] = []
+        total_size = 0
+        for chunk in response.iter_bytes():
+            if not chunk:
+                continue
+            total_size += len(chunk)
+            if total_size > _REMOTE_IMAGE_MAX_BYTES:
+                raise ValueError("远程图片过大，超过 20 MiB 安全限制")
+            chunks.append(chunk)
+
+    encoded = base64.b64encode(b"".join(chunks)).decode("ascii")
+    filename = basename(unquote(parsed.path)) or _inline_image_name(mime_type)
+    return PreparedAttachment(
+        url=f"data:{mime_type};base64,{encoded}",
+        display_name=filename,
+    )
+
+
 def _build_data_url_attachment(raw_url: str) -> PreparedAttachment:
     header, separator, _ = raw_url.partition(",")
     if not separator:
@@ -118,7 +157,7 @@ def _resolve_local_attachment(raw_url: str | None) -> PreparedAttachment:
         return _build_data_url_attachment(raw_url)
 
     if parsed.scheme in {"http", "https"}:
-        raise ValueError("qoder2api 当前只支持本地图片附件或 data URL 图片输入")
+        return _build_remote_attachment(raw_url)
 
     return _build_local_attachment(Path(raw_url).expanduser())
 

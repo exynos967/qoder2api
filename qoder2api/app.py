@@ -30,6 +30,7 @@ from .account_status import load_account_status, refresh_account_status
 from .anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicStreamTranslator,
+    _apply_stop_sequences,
     build_anthropic_message_response,
     convert_anthropic_request_to_chat_request,
 )
@@ -1000,21 +1001,27 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
             chat_request,
             prompt=prompt,
         )
-        output_tokens = _estimate_tokens(_completion_basis(output_text, tool_calls))
+        stop_result = _apply_stop_sequences(output_text, request.stop_sequences)
+        output_tokens = _estimate_tokens(_completion_basis(stop_result.text, tool_calls))
         return JSONResponse(
             content=build_anthropic_message_response(
                 message_id=message_id,
                 model=resolved_model,
-                output_text=output_text,
+                output_text=stop_result.text,
                 tool_calls=tool_calls,
-                finish_reason=finish_reason,
+                finish_reason=("stop_sequence" if stop_result.matched else finish_reason),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                stop_sequence=stop_result.matched,
             )
         )
 
     async def event_stream():
-        translator = AnthropicStreamTranslator(message_id=message_id, prompt_text=prompt.prompt)
+        translator = AnthropicStreamTranslator(
+            message_id=message_id,
+            prompt_text=prompt.prompt,
+            stop_sequences=request.stop_sequences,
+        )
         try:
             iterator, resolved_model = await _start_streaming_completion(
                 chat_request,

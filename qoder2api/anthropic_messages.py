@@ -52,6 +52,42 @@ class _ToolBlockState:
     stopped: bool = False
 
 
+@dataclass(slots=True)
+class StopSequenceResult:
+    text: str
+    matched: str | None = None
+
+
+
+
+def _normalize_stop_sequences(stop_sequences: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for item in stop_sequences or []:
+        sequence = str(item).strip()
+        if sequence and sequence not in normalized:
+            normalized.append(sequence)
+    return normalized
+
+
+def _apply_stop_sequences(text: str, stop_sequences: list[str] | None) -> StopSequenceResult:
+    if not text:
+        return StopSequenceResult(text="")
+
+    best_index: int | None = None
+    best_sequence: str | None = None
+    for sequence in _normalize_stop_sequences(stop_sequences):
+        index = text.find(sequence)
+        if index < 0:
+            continue
+        if best_index is None or index < best_index or (index == best_index and len(sequence) > len(best_sequence or "")):
+            best_index = index
+            best_sequence = sequence
+
+    if best_index is None or best_sequence is None:
+        return StopSequenceResult(text=text)
+    return StopSequenceResult(text=text[:best_index], matched=best_sequence)
+
+
 def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
@@ -177,6 +213,8 @@ def _assistant_blocks_to_message(blocks: str | list[dict[str, Any]] | None) -> C
             continue
         if block_type == "tool_use":
             tool_calls.append(_anthropic_tool_use_to_openai(block))
+            continue
+        if block_type in {"thinking", "redacted_thinking"}:
             continue
         text_blocks.append(_serialize_unknown_block(block))
 
@@ -360,6 +398,7 @@ def build_anthropic_message_response(
     finish_reason: str | None,
     input_tokens: int,
     output_tokens: int,
+    stop_sequence: str | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     normalized_text = output_text.strip()
@@ -374,11 +413,15 @@ def build_anthropic_message_response(
         "role": "assistant",
         "content": content,
         "model": model,
-        "stop_reason": _map_finish_reason_to_stop_reason(
-            finish_reason,
-            has_tool_calls=bool(tool_calls),
+        "stop_reason": (
+            "stop_sequence"
+            if stop_sequence
+            else _map_finish_reason_to_stop_reason(
+                finish_reason,
+                has_tool_calls=bool(tool_calls),
+            )
         ),
-        "stop_sequence": None,
+        "stop_sequence": stop_sequence,
         "usage": {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -389,12 +432,21 @@ def build_anthropic_message_response(
 class AnthropicStreamTranslator:
     """把内部 ParsedStreamEvent 转成 Anthropic SSE。"""
 
-    def __init__(self, *, message_id: str, prompt_text: str) -> None:
+    def __init__(
+        self,
+        *,
+        message_id: str,
+        prompt_text: str,
+        stop_sequences: list[str] | None = None,
+    ) -> None:
         self.message_id = message_id
         self.prompt_tokens = _estimate_tokens(prompt_text)
         self.text_output = ""
         self.tool_calls: list[dict[str, Any]] = []
         self.finish_reason: str | None = None
+        self.stop_sequences = _normalize_stop_sequences(stop_sequences)
+        self._pending_text = ""
+        self.matched_stop_sequence: str | None = None
         self._model = "auto"
         self._text_block_index: int | None = None
         self._text_block_stopped = False
@@ -420,9 +472,11 @@ class AnthropicStreamTranslator:
 
     def feed(self, stream_event: ParsedStreamEvent) -> list[str]:
         payloads: list[str] = []
+        if self.matched_stop_sequence:
+            return payloads
         if stream_event.text_delta:
-            payloads.extend(self._emit_text_delta(stream_event.text_delta))
-        if stream_event.tool_call_deltas:
+            payloads.extend(self._process_text_delta(stream_event.text_delta))
+        if stream_event.tool_call_deltas and not self.matched_stop_sequence:
             payloads.extend(self._emit_tool_call_deltas(stream_event.tool_call_deltas))
         if stream_event.finish_reason:
             self.finish_reason = stream_event.finish_reason
@@ -430,6 +484,10 @@ class AnthropicStreamTranslator:
 
     def finish(self) -> list[str]:
         payloads: list[str] = []
+        payloads.extend(self._flush_remaining_text())
+        if self.matched_stop_sequence:
+            self.finish_reason = "stop_sequence"
+
         payloads.extend(self._flush_late_tool_blocks())
         if self._text_block_index is not None and not self._text_block_stopped:
             payloads.append(
@@ -462,11 +520,15 @@ class AnthropicStreamTranslator:
                 {
                     "type": "message_delta",
                     "delta": {
-                        "stop_reason": _map_finish_reason_to_stop_reason(
-                            self.finish_reason,
-                            has_tool_calls=bool(self.tool_calls),
+                        "stop_reason": (
+                            "stop_sequence"
+                            if self.matched_stop_sequence
+                            else _map_finish_reason_to_stop_reason(
+                                self.finish_reason,
+                                has_tool_calls=bool(self.tool_calls),
+                            )
                         ),
-                        "stop_sequence": None,
+                        "stop_sequence": self.matched_stop_sequence,
                     },
                     "usage": {"output_tokens": output_tokens},
                 },
@@ -484,6 +546,43 @@ class AnthropicStreamTranslator:
             },
         }
         return [_anthropic_sse_payload("error", payload)]
+
+
+
+    def _process_text_delta(self, delta_text: str) -> list[str]:
+        self._pending_text += delta_text
+        return self._drain_pending_text(final=False)
+
+    def _flush_remaining_text(self) -> list[str]:
+        return self._drain_pending_text(final=True)
+
+    def _drain_pending_text(self, *, final: bool) -> list[str]:
+        payloads: list[str] = []
+        if not self._pending_text:
+            return payloads
+
+        stop_result = _apply_stop_sequences(self._pending_text, self.stop_sequences)
+        if stop_result.matched is not None:
+            if stop_result.text:
+                payloads.extend(self._emit_text_delta(stop_result.text))
+            self._pending_text = ""
+            self.matched_stop_sequence = stop_result.matched
+            return payloads
+
+        if final:
+            if self._pending_text:
+                payloads.extend(self._emit_text_delta(self._pending_text))
+                self._pending_text = ""
+            return payloads
+
+        holdback = max((len(item) - 1 for item in self.stop_sequences), default=0)
+        if holdback <= 0 or len(self._pending_text) > holdback:
+            emit_length = len(self._pending_text) - holdback if holdback > 0 else len(self._pending_text)
+            emit_text = self._pending_text[:emit_length]
+            self._pending_text = self._pending_text[emit_length:]
+            if emit_text:
+                payloads.extend(self._emit_text_delta(emit_text))
+        return payloads
 
     def _emit_text_delta(self, delta_text: str) -> list[str]:
         payloads: list[str] = []

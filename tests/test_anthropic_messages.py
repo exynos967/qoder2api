@@ -73,6 +73,37 @@ class _FakeAnthropicTextInvoker:
         return _iterator(), "GLM-5"
 
 
+
+
+class _FakeAnthropicStopInvoker:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run_text(self, **kwargs):
+        self.calls.append(kwargs)
+        return "你好<END>世界", "GLM-5"
+
+    async def stream_events(self, **kwargs):  # pragma: no cover - non-stream only
+        raise AssertionError("stream_events should not be used in non-stream stop test")
+
+
+class _FakeAnthropicStopStreamInvoker:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run_text(self, **kwargs):  # pragma: no cover - stream route should not use it
+        raise AssertionError("run_text should not be used in stream stop test")
+
+    async def stream_events(self, **kwargs):
+        self.calls.append(kwargs)
+
+        async def _iterator():
+            yield ParsedStreamEvent(text_delta="你")
+            yield ParsedStreamEvent(text_delta="好<END>世界", finish_reason="stop")
+
+        return _iterator(), "GLM-5"
+
+
 def _extract_sse_pairs(lines: list[str]) -> list[tuple[str, dict[str, Any]]]:
     pairs: list[tuple[str, dict[str, Any]]] = []
     current_event = "message"
@@ -315,3 +346,58 @@ def test_anthropic_stream_translator_emits_tool_use_events() -> None:
         "partial_json": '{"city":"北京"}',
     }
     assert pairs[-2][1]["delta"]["stop_reason"] == "tool_use"
+
+
+def test_anthropic_messages_non_stream_applies_stop_sequences(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicStopInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+
+    client = TestClient(app_module.app)
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "GLM-5",
+            "max_tokens": 128,
+            "stop_sequences": ["<END>"],
+            "messages": [{"role": "user", "content": "打个招呼"}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "stop_sequence"
+    assert payload["stop_sequence"] == "<END>"
+    assert payload["content"] == [{"type": "text", "text": "你好"}]
+
+
+def test_anthropic_messages_stream_applies_stop_sequences(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicStopStreamInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+
+    client = TestClient(app_module.app)
+    with client.stream(
+        "POST",
+        "/v1/messages",
+        json={
+            "model": "GLM-5",
+            "max_tokens": 64,
+            "stream": True,
+            "stop_sequences": ["<END>"],
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    ) as response:
+        assert response.status_code == 200
+        lines = [line for line in response.iter_lines() if line]
+
+    pairs = _extract_sse_pairs(lines)
+    text_deltas = [
+        payload["delta"]["text"]
+        for event, payload in pairs
+        if event == "content_block_delta" and payload.get("delta", {}).get("type") == "text_delta"
+    ]
+    assert "".join(text_deltas) == "你好"
+    assert all("<END>" not in item for item in text_deltas)
+    assert pairs[-2][1]["delta"]["stop_reason"] == "stop_sequence"
+    assert pairs[-2][1]["delta"]["stop_sequence"] == "<END>"
