@@ -57,6 +57,22 @@ OFFICIAL_CENTER_BASE = f"https://{OFFICIAL_CENTER_HOST}"
 OFFICIAL_CENTER_IP = "8.212.124.35"
 OFFICIAL_DATA_POLICY = "DISAGREE"
 OFFICIAL_AUTH_VERSION = "v1"
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+_RETRYABLE_PROXY_ERROR_FRAGMENTS = (
+    "connect tunnel failed",
+    "tls connect error",
+    "unexpected eof while reading",
+    "received http code 502 from proxy",
+    "ssl routines::unexpected eof",
+    "proxy connect aborted",
+)
 OFFICIAL_RSA_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 4k6Pz1EaDicBMpdpxKduSZu5OANqUq8er4GM95omAGIOPOh+Nx0spthYA2BqGz+l
@@ -732,17 +748,28 @@ def build_official_authorization_headers(
     return headers, final_request_id
 
 
-def _curl_json_request(
+def _proxy_configured() -> bool:
+    return any(os.environ.get(key) for key in _PROXY_ENV_KEYS)
+
+
+def _is_retryable_proxy_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(fragment in lowered for fragment in _RETRYABLE_PROXY_ERROR_FRAGMENTS)
+
+
+def _build_curl_json_command(
     *,
     url: str,
     headers: Mapping[str, str],
-    method: str = "GET",
-    body: str = "",
-    timeout: float = 20.0,
-) -> dict[str, Any]:
+    method: str,
+    body: str,
+    timeout: float,
+    http_version_flag: str,
+    use_resolve: bool,
+) -> list[str]:
     command = [
         "curl",
-        "--http2",
+        http_version_flag,
         "--silent",
         "--show-error",
         "--location",
@@ -752,34 +779,70 @@ def _curl_json_request(
         "\n__STATUS__:%{http_code}",
         "-X",
         method,
-        "--resolve",
-        f"{OFFICIAL_CENTER_HOST}:443:{OFFICIAL_CENTER_IP}",
     ]
+    if use_resolve:
+        command.extend(["--resolve", f"{OFFICIAL_CENTER_HOST}:443:{OFFICIAL_CENTER_IP}"])
     for key, value in headers.items():
         command.extend(["-H", f"{key}: {value}"])
     if method.upper() != "GET":
         command.extend(["--data-raw", body])
     command.append(url)
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        check=False,
-        text=True,
-        encoding="utf-8",
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "curl 请求失败")
+    return command
+
+
+def _curl_json_request(
+    *,
+    url: str,
+    headers: Mapping[str, str],
+    method: str = "GET",
+    body: str = "",
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    attempts: list[tuple[str, bool]] = [("--http2", True)]
+    if _proxy_configured():
+        attempts.extend([("--http1.1", True), ("--http1.1", False)])
+
+    last_error: RuntimeError | None = None
     marker = "\n__STATUS__:"
-    if marker not in completed.stdout:
-        raise RuntimeError(f"curl 输出缺少状态标记: {completed.stdout[:200]}")
-    raw_body, raw_status = completed.stdout.rsplit(marker, 1)
-    status_code = int(raw_status.strip())
-    body_text = raw_body.strip()
-    if status_code < 200 or status_code >= 300:
-        raise RuntimeError(f"HTTP {status_code}: {body_text[:400]}")
-    if not body_text:
-        return {}
-    return json.loads(body_text)
+
+    for index, (http_version_flag, use_resolve) in enumerate(attempts):
+        command = _build_curl_json_command(
+            url=url,
+            headers=headers,
+            method=method,
+            body=body,
+            timeout=timeout,
+            http_version_flag=http_version_flag,
+            use_resolve=use_resolve,
+        )
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+        )
+        if completed.returncode != 0:
+            error_message = completed.stderr.strip() or completed.stdout.strip() or "curl 请求失败"
+            last_error = RuntimeError(error_message)
+            if index < len(attempts) - 1 and _is_retryable_proxy_error(error_message):
+                continue
+            raise last_error
+
+        if marker not in completed.stdout:
+            raise RuntimeError(f"curl 输出缺少状态标记: {completed.stdout[:200]}")
+        raw_body, raw_status = completed.stdout.rsplit(marker, 1)
+        status_code = int(raw_status.strip())
+        body_text = raw_body.strip()
+        if status_code < 200 or status_code >= 300:
+            raise RuntimeError(f"HTTP {status_code}: {body_text[:400]}")
+        if not body_text:
+            return {}
+        return json.loads(body_text)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("curl 请求失败")
 
 
 def request_official_user_plan(
