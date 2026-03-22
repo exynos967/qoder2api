@@ -332,6 +332,12 @@ function renderOverview(data) {
     const concurrencyLimit = health.account_pool_max_concurrency ?? '--';
     const proxyConfigured = Boolean(state.runtimeSettings?.proxy_url || health.proxy_configured);
     const llmapiConfigured = Boolean(state.runtimeSettings?.llmapi_api_key || health.llmapi_api_key_configured);
+    const quotaSummary = accountsPayload.quota_summary || {};
+    const quotaTotal = toNumericQuota(quotaSummary.total);
+    const quotaUsed = toNumericQuota(quotaSummary.used);
+    const quotaRemaining = toNumericQuota(quotaSummary.remaining);
+    const quotaUnit = String(quotaSummary.unit || '').trim();
+    const quotaAccounts = Number(quotaSummary.accounts_with_quota || 0);
 
     state.overview = data;
 
@@ -357,6 +363,20 @@ function renderOverview(data) {
     setText('dashboard-accounts-total', String(totalAccounts));
     setText('dashboard-active-requests', String(activeRequests));
     setText('dashboard-concurrency-limit', String(concurrencyLimit));
+    setText('dashboard-quota-total', formatQuotaMetric(quotaTotal, quotaUnit));
+    setText('dashboard-quota-remaining', formatQuotaMetric(quotaRemaining, quotaUnit));
+    setText(
+        'dashboard-quota-total-hint',
+        quotaAccounts > 0
+            ? `覆盖 ${quotaAccounts} 个账号${quotaUnit ? ` · ${quotaUnit}` : ''}`
+            : '暂无额度数据'
+    );
+    setText(
+        'dashboard-quota-remaining-hint',
+        quotaAccounts > 0
+            ? `已使用 ${formatQuotaMetric(quotaUsed, quotaUnit)}`
+            : '等待状态刷新'
+    );
     setText('dashboard-routing-mode', 'Round Robin');
     setText('dashboard-proxy-status', proxyConfigured ? '已配置' : '未配置');
     setText('dashboard-llmapi-status', llmapiConfigured ? '已配置' : '未配置');
@@ -454,6 +474,14 @@ function formatQuotaAmount(value) {
         return value.toFixed(1).replace(/\.0$/, '');
     }
     return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatQuotaMetric(value, unit = '') {
+    if (!Number.isFinite(value)) {
+        return '--';
+    }
+    const suffix = unit ? ` ${unit}` : '';
+    return `${formatQuotaAmount(value)}${suffix}`;
 }
 
 function resolveQuotaProgress(account) {

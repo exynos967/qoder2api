@@ -306,6 +306,11 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     assert overview_data["accounts"]["accounts"][0]["quota_used"] == 75.0
     assert overview_data["accounts"]["accounts"][0]["quota_remaining"] == 225.0
     assert overview_data["accounts"]["accounts"][0]["quota_unit"] == "credits"
+    assert overview_data["accounts"]["quota_summary"]["total"] == 300.0
+    assert overview_data["accounts"]["quota_summary"]["used"] == 75.0
+    assert overview_data["accounts"]["quota_summary"]["remaining"] == 225.0
+    assert overview_data["accounts"]["quota_summary"]["unit"] == "credits"
+    assert overview_data["accounts"]["quota_summary"]["accounts_with_quota"] == 1
 
     logs_data = asyncio.run(app_module.webui_logs(lines=100))
     assert logs_data["exists"] is True

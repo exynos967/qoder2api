@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import logging
 import time
 import uuid
@@ -342,6 +343,72 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
     }
 
 
+def _coerce_quota_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
+    if isinstance(value, str):
+        normalized = value.strip().replace(",", "")
+        if not normalized:
+            return None
+        try:
+            numeric = float(normalized)
+        except ValueError:
+            return None
+        return numeric if math.isfinite(numeric) else None
+    return None
+
+
+def _build_account_quota_summary(accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    total = 0.0
+    used = 0.0
+    remaining = 0.0
+    accounts_with_quota = 0
+    quota_unit = ''
+
+    for account in accounts:
+        quota_total = _coerce_quota_value(account.get('quota_total'))
+        if quota_total is None or quota_total <= 0:
+            continue
+
+        quota_used = _coerce_quota_value(account.get('quota_used'))
+        quota_remaining = _coerce_quota_value(account.get('quota_remaining'))
+        if quota_used is None and quota_remaining is not None:
+            quota_used = max(quota_total - quota_remaining, 0.0)
+        if quota_remaining is None and quota_used is not None:
+            quota_remaining = max(quota_total - quota_used, 0.0)
+
+        total += quota_total
+        if quota_used is not None:
+            used += max(quota_used, 0.0)
+        if quota_remaining is not None:
+            remaining += max(quota_remaining, 0.0)
+        accounts_with_quota += 1
+
+        unit = str(account.get('quota_unit') or '').strip()
+        if unit and not quota_unit:
+            quota_unit = unit
+
+    if accounts_with_quota == 0:
+        return {
+            'total': None,
+            'used': None,
+            'remaining': None,
+            'unit': '',
+            'accounts_with_quota': 0,
+        }
+
+    return {
+        'total': total,
+        'used': used,
+        'remaining': remaining,
+        'unit': quota_unit,
+        'accounts_with_quota': accounts_with_quota,
+    }
+
+
 def _build_runtime_settings_payload() -> dict[str, Any]:
     manager = get_runtime_settings_manager()
     snapshot = manager.load()
@@ -356,10 +423,12 @@ def _build_accounts_payload(*, include_pending: bool = True) -> dict[str, Any]:
     pool = get_account_pool()
     accounts = pool.list_accounts(include_pending=include_pending)
     enabled_accounts = pool.get_enabled_accounts()
+    serialized_accounts = [_serialize_account(account) for account in accounts]
     return {
-        "accounts": [_serialize_account(account) for account in accounts],
+        "accounts": serialized_accounts,
         "total_accounts": len(accounts),
         "enabled_accounts": len(enabled_accounts),
+        "quota_summary": _build_account_quota_summary(serialized_accounts),
     }
 
 
