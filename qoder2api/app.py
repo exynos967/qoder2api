@@ -544,12 +544,12 @@ async def webui_refresh_account_status(account_id: str) -> dict[str, Any]:
     if account is None:
         raise QoderLoginError(f"找不到账号: {account_id}", status_code=404)
     if not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
-        raise QoderLoginError("账号当前没有可用登录态，无法检测状态", status_code=400)
+        raise QoderLoginError("账号当前没有可用登录态，无法刷新状态", status_code=400)
 
     try:
         snapshot = refresh_account_status(get_settings(), account.qoder_home_path)
     except Exception as exc:
-        raise QoderLoginError(f"检测账号状态失败: {exc}", status_code=502) from exc
+        raise QoderLoginError(f"刷新账号状态失败: {exc}", status_code=502) from exc
 
     refreshed_account = get_account(get_settings(), account_id) or account
     label = snapshot.plan_tier_name or snapshot.user_tag or snapshot.user_type or "unknown"
@@ -558,6 +558,71 @@ async def webui_refresh_account_status(account_id: str) -> dict[str, Any]:
         "message": f"账号状态已刷新：{label}",
         "account": _serialize_account(refreshed_account),
         "status": snapshot.model_dump(exclude_none=True),
+    }
+
+
+@app.post("/webui/api/accounts/refresh-statuses")
+async def webui_refresh_all_account_statuses() -> dict[str, Any]:
+    settings = get_settings()
+    accounts = get_account_pool().list_accounts(include_pending=False)
+    refreshed: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+
+    for account in accounts:
+        if not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
+            skipped.append(
+                {
+                    "id": account.id,
+                    "label": account.label,
+                    "reason": "账号当前没有可用登录态",
+                }
+            )
+            continue
+
+        try:
+            snapshot = refresh_account_status(settings, account.qoder_home_path)
+        except Exception as exc:
+            failed.append(
+                {
+                    "id": account.id,
+                    "label": account.label,
+                    "reason": str(exc),
+                }
+            )
+            continue
+
+        refreshed.append(
+            {
+                "id": account.id,
+                "label": account.label,
+                "plan_tier_name": snapshot.plan_tier_name,
+                "quota_total": snapshot.quota_total,
+                "quota_used": snapshot.quota_used,
+                "quota_remaining": snapshot.quota_remaining,
+            }
+        )
+
+    summary_parts: list[str] = []
+    if refreshed:
+        summary_parts.append(f"已刷新 {len(refreshed)} 个账号")
+    if skipped:
+        summary_parts.append(f"跳过 {len(skipped)} 个未登录账号")
+    if failed:
+        summary_parts.append(f"失败 {len(failed)} 个账号")
+    if not summary_parts:
+        summary_parts.append("没有可刷新的账号")
+
+    payload = _build_accounts_payload()
+    return {
+        "success": not failed,
+        "message": "，".join(summary_parts),
+        "refreshed": refreshed,
+        "skipped": skipped,
+        "failed": failed,
+        "accounts": payload["accounts"],
+        "total_accounts": payload["total_accounts"],
+        "enabled_accounts": payload["enabled_accounts"],
     }
 
 

@@ -364,3 +364,85 @@ def test_webui_refresh_account_status_route(monkeypatch, tmp_path: Path) -> None
     assert payload["status"]["quota_used"] == 75.0
     assert payload["status"]["quota_remaining"] == 225.0
     assert payload["message"].startswith("账号状态已刷新")
+
+
+class _StaticPool:
+    def __init__(self, accounts: list[QoderAccount]) -> None:
+        self._accounts = accounts
+
+    def list_accounts(self, include_pending: bool = False) -> list[QoderAccount]:
+        return list(self._accounts)
+
+
+def test_webui_refresh_all_account_statuses_route(monkeypatch, tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    second_home = prepare_qoder_home(tmp_path / "second")
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    accounts = [
+        QoderAccount(
+            id="acct-1",
+            label="账号一",
+            enabled=True,
+            managed=True,
+            status="ready",
+            auth_type="qoder-browser",
+            qoder_home=str(qoder_home),
+            machine_id="machine-1",
+        ),
+        QoderAccount(
+            id="acct-2",
+            label="账号二",
+            enabled=True,
+            managed=True,
+            status="ready",
+            auth_type="qoder-browser",
+            qoder_home=str(second_home),
+            machine_id="machine-2",
+        ),
+    ]
+
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_module, "get_account_pool", lambda: _StaticPool(accounts))
+
+    def _refresh(_settings: Settings, home: Path) -> AccountStatusSnapshot:
+        if home == qoder_home:
+            return AccountStatusSnapshot(
+                uid="user-1",
+                email="demo@example.com",
+                user_type="personal_professional_trial",
+                user_tag="Pro Trial",
+                plan_tier_name="Pro Trial",
+                is_quota_exceeded=False,
+                quota_total=300.0,
+                quota_used=12.0,
+                quota_remaining=288.0,
+                quota_unit="credits",
+                checked_at="2026-03-22T16:30:00+08:00",
+                source="live_query",
+            )
+        raise RuntimeError("账号当前没有可用登录态")
+
+    monkeypatch.setattr(app_module, "refresh_account_status", _refresh)
+    monkeypatch.setattr(
+        app_module,
+        "_build_accounts_payload",
+        lambda **_kwargs: {
+            "accounts": [{"id": "acct-1", "quota_total": 300.0}],
+            "total_accounts": 2,
+            "enabled_accounts": 2,
+        },
+    )
+
+    def _inspect(home: Path) -> dict[str, bool]:
+        return {"logged_in_hint": home == qoder_home}
+
+    monkeypatch.setattr(app_module, "inspect_local_auth", _inspect)
+
+    payload = asyncio.run(app_module.webui_refresh_all_account_statuses())
+
+    assert payload["success"] is True
+    assert payload["message"] == "已刷新 1 个账号，跳过 1 个未登录账号"
+    assert payload["refreshed"][0]["id"] == "acct-1"
+    assert payload["refreshed"][0]["quota_total"] == 300.0
+    assert payload["skipped"][0]["id"] == "acct-2"
+    assert payload["accounts"][0]["quota_total"] == 300.0

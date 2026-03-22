@@ -254,7 +254,7 @@ function loadingIconSvg() {
 
 function actionLoadingLabel(action) {
     const labels = {
-        detect: '检测中',
+        detect: '刷新中',
         test: '测试中',
         rename: '保存中',
         toggle: '更新中',
@@ -524,9 +524,10 @@ function renderAccountsTable(accounts) {
         actions.push(buildActionButton({
             action: 'detect',
             accountId: account.id,
-            label: '检测状态',
+            label: '刷新状态',
             icon: 'detect',
             disabled: !account.logged_in_hint,
+            extraAttrs: 'title="实时刷新该账号的套餐、额度与登录状态"',
         }));
         actions.push(buildActionButton({
             action: 'test',
@@ -835,13 +836,31 @@ async function saveRuntimeSettings(event) {
     }
 }
 
-async function refreshAccountStatus(accountId) {
+async function refreshAccountStatus(accountId, { silent = false } = {}) {
     const result = await apiRequest(`${ACCOUNTS_API}/${accountId}/status`, {
         method: 'POST',
         body: '{}',
     });
-    showToast(result.message || '账号状态已刷新', 'success');
+    if (!silent) {
+        showToast(result.message || '账号状态已刷新', 'success');
+    }
     await Promise.all([loadOverview(), loadAccounts()]);
+    return result;
+}
+
+async function refreshAllAccountStatuses() {
+    const button = $('accounts-refresh-status-btn');
+    const restoreButton = setActionButtonLoading(button, '刷新中');
+    try {
+        const result = await apiRequest(`${ACCOUNTS_API}/refresh-statuses`, {
+            method: 'POST',
+            body: '{}',
+        });
+        showToast(result.message || '账号状态已批量刷新', result.success === false ? 'warning' : 'success');
+        await Promise.all([loadOverview(), loadAccounts()]);
+    } finally {
+        restoreButton();
+    }
 }
 
 async function deleteAccount(accountId) {
@@ -999,6 +1018,7 @@ function bindEvents() {
     });
 
     $('dashboard-refresh-btn').addEventListener('click', () => loadOverview().catch((error) => showToast(error.message, 'error')));
+    $('accounts-refresh-status-btn').addEventListener('click', () => refreshAllAccountStatuses().catch((error) => showToast(error.message, 'error')));
     $('accounts-refresh-btn').addEventListener('click', () => Promise.all([loadOverview(), loadAccounts()]).catch((error) => showToast(error.message, 'error')));
     $('models-refresh-btn').addEventListener('click', () => Promise.all([loadModels(), loadRuntimeSettings()]).catch((error) => showToast(error.message, 'error')));
     $('settings-refresh-btn').addEventListener('click', () => loadRuntimeSettings().catch((error) => showToast(error.message, 'error')));
