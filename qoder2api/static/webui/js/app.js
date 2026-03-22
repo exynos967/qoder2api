@@ -341,18 +341,6 @@ function renderOverview(data) {
 
     state.overview = data;
 
-    setStatusBadge(
-        $('auth-status-badge'),
-        auth.logged_in_hint ? 'logged_in' : 'missing',
-        auth.logged_in_hint ? '已发现登录态' : '尚未登录'
-    );
-    setText(
-        'auth-status-text',
-        auth.logged_in_hint
-            ? `已启用 ${enabledAccounts}/${totalAccounts} 个账号。`
-            : '当前没有可用登录账号。'
-    );
-
     setText('health-status', health.status || '--');
     setText('health-version', health.version || '--');
     setText('health-infer-endpoint', health.infer_endpoint || '--');
