@@ -9,7 +9,7 @@ const AUTH_START_API = '/auth/browser/start';
 const PAGE_META = {
     dashboard: {
         title: '仪表盘',
-        subtitle: '账号状态、轮询调度与运行健康总览',
+        subtitle: '多账号轮询概览',
     },
     accounts: {
         title: '账号池',
@@ -207,8 +207,11 @@ function updateTopbarSummary() {
 
 function resolvePlanTone(planText) {
     const text = String(planText || '').toLowerCase();
-    if (!text) {
+    if (!text || text === '未检测') {
         return 'tone-muted';
+    }
+    if (text.includes('ultra') || text.includes('pro+')) {
+        return 'tone-success';
     }
     if (text.includes('trial') || text.includes('pro')) {
         return 'tone-success';
@@ -340,8 +343,8 @@ function renderOverview(data) {
     setText(
         'auth-status-text',
         auth.logged_in_hint
-            ? `账号池 ${totalAccounts} 个，启用 ${enabledAccounts} 个，默认从已启用账号中轮询调度。`
-            : '当前未发现可用登录态，请前往账号池页发起网页登录。'
+            ? `已启用 ${enabledAccounts}/${totalAccounts} 个账号。`
+            : '当前没有可用登录账号。'
     );
 
     setText('health-status', health.status || '--');
@@ -380,15 +383,110 @@ function buildAccountStatusText(account) {
     return account.enabled ? '启用' : '禁用';
 }
 
+function normalizePlanLabel(planText) {
+    const raw = String(planText || '').trim();
+    const text = raw.toLowerCase();
+    if (!text) {
+        return '未检测';
+    }
+    if (text.includes('pro+')) {
+        return 'Pro+';
+    }
+    if (text.includes('ultra')) {
+        return 'Ultra';
+    }
+    if (text.includes('trial') || text.includes('professional_trial')) {
+        return 'Pro';
+    }
+    if (text.includes('free')) {
+        return 'Free';
+    }
+    if (text.includes('pro')) {
+        return 'Pro';
+    }
+    return raw;
+}
+
+function isSyntheticAccountLabel(label) {
+    const text = String(label || '').trim();
+    return /^qoder\s*账号-[0-9a-f]+$/i.test(text);
+}
+
+function buildAccountIdentity(account) {
+    const email = String(account.email || '').trim();
+    const name = String(account.name || '').trim();
+    const label = String(account.label || '').trim();
+    const primary = email || name || (isSyntheticAccountLabel(label) ? '未登录账号' : label || '未命名账号');
+    let secondary = '';
+    if (email && name && name !== email) {
+        secondary = name;
+    } else if (!email && label && !isSyntheticAccountLabel(label) && label !== primary) {
+        secondary = label;
+    }
+    return { primary, secondary };
+}
+
+function toNumericQuota(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string') {
+        const normalized = value.trim().replace(/,/g, '');
+        if (!normalized) {
+            return null;
+        }
+        const parsed = Number(normalized);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    return null;
+}
+
+function formatQuotaAmount(value) {
+    if (!Number.isFinite(value)) {
+        return '--';
+    }
+    if (Math.abs(value) >= 1000 || Number.isInteger(value)) {
+        return value.toLocaleString();
+    }
+    if (Math.abs(value) >= 100) {
+        return value.toFixed(1).replace(/\.0$/, '');
+    }
+    return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function resolveQuotaProgress(account) {
+    const total = toNumericQuota(account.quota_total);
+    if (!(total > 0)) {
+        return null;
+    }
+    let used = toNumericQuota(account.quota_used);
+    const remaining = toNumericQuota(account.quota_remaining);
+    if (used === null && remaining !== null) {
+        used = Math.max(total - remaining, 0);
+    }
+    if (used === null) {
+        return null;
+    }
+    const clampedUsed = Math.min(Math.max(used, 0), total);
+    const percent = Math.min(100, Math.max(0, (clampedUsed / total) * 100));
+    const unit = String(account.quota_unit || '').trim();
+    const suffix = unit ? ` ${unit}` : '';
+    return {
+        used: clampedUsed,
+        total,
+        percent,
+        label: `已用 ${formatQuotaAmount(clampedUsed)}/${formatQuotaAmount(total)}${suffix}`,
+    };
+}
+
 function buildAccountCapabilityText(account) {
-    const planText = account.plan_tier_name || account.user_tag || account.user_type || '未检测';
-    const emailText = account.email || '--';
-    const checkedText = account.status_checked_at || '未检测';
+    const planText = normalizePlanLabel(account.plan_tier_name || account.user_tag || account.user_type || '');
     return {
         planText,
-        emailText,
-        checkedText,
         quota: resolveQuotaState(account.is_quota_exceeded),
+        quotaProgress: resolveQuotaProgress(account),
     };
 }
 
@@ -404,13 +502,24 @@ function renderAccountsTable(accounts) {
     for (const account of accounts) {
         const tr = document.createElement('tr');
         tr.dataset.accountId = account.id;
-        const machineIdText = account.machine_id
-            ? `<div class="table-secondary-text mono-inline">machine_id: ${escapeHtml(account.machine_id)}</div>`
+        const identity = buildAccountIdentity(account);
+        const identitySecondary = identity.secondary
+            ? `<div class="table-secondary-text">${escapeHtml(identity.secondary)}</div>`
             : '';
         const actions = [];
         const capability = buildAccountCapabilityText(account);
         const statusTone = account.enabled ? 'tone-success' : 'tone-muted';
         const planTone = resolvePlanTone(capability.planText);
+        const quotaProgress = capability.quotaProgress
+            ? `
+                <div class="quota-progress-row" aria-label="额度使用进度">
+                    <div class="quota-progress-track">
+                        <div class="quota-progress-fill" style="width: ${capability.quotaProgress.percent.toFixed(2)}%;"></div>
+                    </div>
+                    <span class="quota-progress-label">${escapeHtml(capability.quotaProgress.label)}</span>
+                </div>
+            `
+            : '';
 
         actions.push(buildActionButton({
             action: 'detect',
@@ -452,8 +561,8 @@ function renderAccountsTable(accounts) {
 
         tr.innerHTML = `
             <td>
-                <div class="table-primary-text">${escapeHtml(account.label)}</div>
-                ${machineIdText}
+                <div class="table-primary-text">${escapeHtml(identity.primary)}</div>
+                ${identitySecondary}
             </td>
             <td class="account-status-cell">
                 <span class="table-badge ${statusTone}">${escapeHtml(buildAccountStatusText(account))}</span>
@@ -463,8 +572,7 @@ function renderAccountsTable(accounts) {
                     <span class="table-badge ${planTone}">${escapeHtml(capability.planText)}</span>
                     <span class="table-badge ${capability.quota.tone}">${escapeHtml(capability.quota.text)}</span>
                 </div>
-                <div class="table-secondary-text">${escapeHtml(capability.emailText)}</div>
-                <div class="table-secondary-text">模型 ${escapeHtml(String(account.model_count ?? 0))} 个 · 检测：${escapeHtml(capability.checkedText)}</div>
+                ${quotaProgress}
             </td>
             <td class="account-actions-cell">
                 <div class="account-actions-group">${actions.join('')}</div>

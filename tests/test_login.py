@@ -253,6 +253,10 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
             user_tag="Pro Trial",
             plan_tier_name="Pro Trial",
             is_quota_exceeded=False,
+            quota_total=300.0,
+            quota_used=75.0,
+            quota_remaining=225.0,
+            quota_unit="credits",
             checked_at="2026-03-21T21:24:05+08:00",
             source="namespaced_summary",
         ),
@@ -298,6 +302,10 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     assert overview_data["accounts"]["accounts"][0]["machine_type"] == "4e4a13f491a127292e"
     assert overview_data["accounts"]["accounts"][0]["plan_tier_name"] == "Pro Trial"
     assert overview_data["accounts"]["accounts"][0]["is_quota_exceeded"] is False
+    assert overview_data["accounts"]["accounts"][0]["quota_total"] == 300.0
+    assert overview_data["accounts"]["accounts"][0]["quota_used"] == 75.0
+    assert overview_data["accounts"]["accounts"][0]["quota_remaining"] == 225.0
+    assert overview_data["accounts"]["accounts"][0]["quota_unit"] == "credits"
 
     logs_data = asyncio.run(app_module.webui_logs(lines=100))
     assert logs_data["exists"] is True
@@ -308,7 +316,8 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     js_text = (Path(file_response.path).parent / "js" / "app.js").read_text(encoding="utf-8")
     assert file_response.status_code == 200
     assert "qoder2api 管理后台" in index_html
-    assert "Infer Endpoint" in index_html
+    assert "实时概览" in index_html
+    assert "Infer Endpoint" not in index_html
     assert "const OVERVIEW_API = '/webui/api/overview';" in js_text
 
 
@@ -338,6 +347,10 @@ def test_webui_refresh_account_status_route(monkeypatch, tmp_path: Path) -> None
             user_tag="Pro Trial",
             plan_tier_name="Pro Trial",
             is_quota_exceeded=False,
+            quota_total=300.0,
+            quota_used=75.0,
+            quota_remaining=225.0,
+            quota_unit="credits",
             checked_at="2026-03-21T21:24:05+08:00",
             source="live_query",
         ),
@@ -347,4 +360,7 @@ def test_webui_refresh_account_status_route(monkeypatch, tmp_path: Path) -> None
 
     assert payload["success"] is True
     assert payload["status"]["plan_tier_name"] == "Pro Trial"
+    assert payload["status"]["quota_total"] == 300.0
+    assert payload["status"]["quota_used"] == 75.0
+    assert payload["status"]["quota_remaining"] == 225.0
     assert payload["message"].startswith("账号状态已刷新")

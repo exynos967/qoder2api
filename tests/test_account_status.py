@@ -27,6 +27,21 @@ def test_persist_summary_account_status(tmp_path: Path) -> None:
             }
         },
         "data_policy": {"result": {"dataPolicy": "AGREE"}},
+        "user_credit_usage": {
+            "userId": "trial-user",
+            "totalUsagePercentage": 0.25,
+            "isQuotaExceeded": False,
+            "userQuota": {
+                "total": 300.0,
+                "used": 75.0,
+                "remaining": 225.0,
+                "percentage": 0.25,
+                "unit": "credits",
+                "detailUrl": "https://qoder.com/account/usage",
+            },
+            "expiresAt": 1775025863354,
+            "upgradeUrl": "https://qoder.com/pricing?client=qoder",
+        },
     }
 
     snapshot = persist_summary_account_status(qoder_home, summary)
@@ -37,6 +52,12 @@ def test_persist_summary_account_status(tmp_path: Path) -> None:
     assert snapshot.user_type == "personal_professional_trial"
     assert snapshot.is_quota_exceeded is False
     assert snapshot.summary_path.endswith("summary.json")
+    assert snapshot.quota_total == 300.0
+    assert snapshot.quota_used == 75.0
+    assert snapshot.quota_remaining == 225.0
+    assert snapshot.quota_unit == "credits"
     assert stored is not None
     assert stored.plan_tier_name == "Pro Trial"
     assert stored.data_policy == "AGREE"
+    assert stored.quota_total == 300.0
+    assert stored.quota_detail_url == "https://qoder.com/account/usage"

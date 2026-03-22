@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
-from .account_status import persist_summary_account_status
+from .account_status import persist_summary_account_status, refresh_account_status
 from .auth_state import (
     CachedUserInfo,
     ensure_auth_dir,
@@ -132,6 +132,10 @@ class NamespacedBrowserLoginClient:
         info = self._persist_login_state(qoder_home=qoder_home, context=context, summary=summary)
         self._persist_device_identity(qoder_home=qoder_home, context=context, summary=summary)
         persist_summary_account_status(qoder_home, summary)
+        try:
+            refresh_account_status(self.settings, qoder_home)
+        except Exception as exc:
+            self._emit(progress_callback, f"[quota] 刷新额度失败: {exc}")
         if not info.login_device_id:
             info.login_device_id = context.machine_id
             save_cached_user_info(qoder_home, info)

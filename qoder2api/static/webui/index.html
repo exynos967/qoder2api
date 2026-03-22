@@ -121,7 +121,7 @@
                 <div class="topbar-left">
                     <div class="page-kicker">Operations Console</div>
                     <h1 id="page-title">仪表盘</h1>
-                    <p id="page-subtitle" class="page-subtitle">账号状态、轮询调度与运行健康总览</p>
+                    <p id="page-subtitle" class="page-subtitle">多账号轮询概览</p>
                 </div>
                 <div class="topbar-right">
                     <div class="topbar-brand-chip">
@@ -140,75 +140,17 @@
 
             <div class="content">
                 <section id="dashboard-section" class="section active">
-                    <div class="hero-panel">
-                        <div class="hero-copy">
-                            <div class="hero-eyebrow">Qoder Trial Operations</div>
-                            <h2 class="hero-title">统一管理多账号登录态、模型暴露与上游调度</h2>
-                            <p class="hero-text">默认从已启用账号中轮询分发请求，登录态、缓存与设备信息彼此隔离，适合试用账号池与代理服务一体化运营。</p>
-                            <div class="hero-meta">
-                                <span class="meta-pill">Round Robin</span>
-                                <span id="dashboard-concurrency-pill" class="meta-pill">并发 --</span>
-                                <span id="dashboard-proxy-pill" class="meta-pill">代理未配置</span>
+                    <div class="card full-width dashboard-summary-card">
+                        <div class="card-header dashboard-summary-header">
+                            <div>
+                                <span>实时概览</span>
                             </div>
-                            <div class="hero-status-ribbon">
-                                <div class="status-ribbon-item">
-                                    <span>Routing</span>
-                                    <strong>Round Robin</strong>
-                                </div>
-                                <div class="status-ribbon-item">
-                                    <span>Concurrency</span>
-                                    <strong id="dashboard-monitor-concurrency">--</strong>
-                                </div>
-                                <div class="status-ribbon-item">
-                                    <span>Proxy</span>
-                                    <strong id="dashboard-monitor-proxy">未配置</strong>
-                                </div>
+                            <div class="header-actions">
+                                <button id="dashboard-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
                             </div>
                         </div>
-
-                        <div class="hero-side">
-                            <div class="monitor-panel">
-                                <div class="monitor-panel-header">
-                                    <div class="monitor-title-wrap">
-                                        <span class="monitor-live-dot"></span>
-                                        <span class="monitor-panel-title">Pool Monitor</span>
-                                    </div>
-                                    <span id="dashboard-monitor-status" class="monitor-status-text">Awaiting Data</span>
-                                </div>
-                                <div class="monitor-wave" aria-hidden="true">
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                </div>
-                                <div class="monitor-grid">
-                                    <div class="monitor-cell">
-                                        <span>Accounts</span>
-                                        <strong id="dashboard-monitor-accounts">0 / 0</strong>
-                                    </div>
-                                    <div class="monitor-cell">
-                                        <span>Active</span>
-                                        <strong id="dashboard-monitor-active">0 req</strong>
-                                    </div>
-                                    <div class="monitor-cell">
-                                        <span>Models</span>
-                                        <strong id="dashboard-monitor-models">0 online</strong>
-                                    </div>
-                                    <div class="monitor-cell">
-                                        <span>llmapi</span>
-                                        <strong id="dashboard-monitor-llmapi">未配置</strong>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="metrics-grid">
+                        <div class="card-body">
+                            <div class="metrics-grid dashboard-metrics-grid">
                                 <article class="metric-tile">
                                     <span class="metric-label">登录态</span>
                                     <div id="auth-status-badge" class="status-badge starting">检查中</div>
@@ -229,54 +171,6 @@
                                     <div id="dashboard-active-requests" class="big-number">0</div>
                                     <p class="hint">并发上限 <span id="dashboard-concurrency-limit">--</span></p>
                                 </article>
-                            </div>
-
-                            <div class="ops-note-card">
-                                <div class="ops-note-kicker">Workflow</div>
-                                <ul class="ops-note-list">
-                                    <li>账号池默认在已启用账号之间轮询。</li>
-                                    <li>每个账号对应独立的 <code>.qoder</code> 工作目录。</li>
-                                    <li>适合统一代理多账号试用与上游 API 出口。</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="overview-grid">
-                        <div class="card full-width">
-                            <div class="card-header">
-                                <div>
-                                    <span>运行信息</span>
-                                    <p class="section-intro">服务健康、上游入口与版本信息。</p>
-                                </div>
-                                <div class="header-actions">
-                                    <button id="dashboard-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <table class="info-table">
-                                    <tr><td>状态</td><td id="health-status">--</td></tr>
-                                    <tr><td>版本</td><td id="health-version">--</td></tr>
-                                    <tr><td>Infer Endpoint</td><td id="health-infer-endpoint" class="mono-cell">--</td></tr>
-                                    <tr><td>OpenAPI Endpoint</td><td id="health-openapi-endpoint" class="mono-cell">--</td></tr>
-                                </table>
-                            </div>
-                        </div>
-
-                        <div class="card full-width">
-                            <div class="card-header">
-                                <div>
-                                    <span>调度概览</span>
-                                    <p class="section-intro">账号池当前的路由策略、代理状态与并发运行参数。</p>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <ul class="stack-list">
-                                    <li><span>调度策略</span><strong id="dashboard-routing-mode">Round Robin</strong></li>
-                                    <li><span>代理状态</span><strong id="dashboard-proxy-status">未配置</strong></li>
-                                    <li><span>llmapi Key</span><strong id="dashboard-llmapi-status">未配置</strong></li>
-                                    <li><span>账号池并发</span><strong id="dashboard-concurrency-text">0 / --</strong></li>
-                                </ul>
                             </div>
                         </div>
                     </div>

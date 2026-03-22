@@ -309,6 +309,19 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
         "is_quota_exceeded": (
             status_snapshot.is_quota_exceeded if status_snapshot else None
         ),
+        "quota_total": status_snapshot.quota_total if status_snapshot else None,
+        "quota_used": status_snapshot.quota_used if status_snapshot else None,
+        "quota_remaining": status_snapshot.quota_remaining if status_snapshot else None,
+        "quota_percentage": status_snapshot.quota_percentage if status_snapshot else None,
+        "quota_unit": status_snapshot.quota_unit if status_snapshot else "",
+        "quota_detail_url": status_snapshot.quota_detail_url if status_snapshot else "",
+        "total_usage_percentage": (
+            status_snapshot.total_usage_percentage if status_snapshot else None
+        ),
+        "quota_expires_at": status_snapshot.quota_expires_at if status_snapshot else None,
+        "add_credits_url": status_snapshot.add_credits_url if status_snapshot else "",
+        "upgrade_url": status_snapshot.upgrade_url if status_snapshot else "",
+        "credit_usage_error": status_snapshot.credit_usage_error if status_snapshot else "",
         "cloud_type": status_snapshot.cloud_type if status_snapshot else "",
         "status_checked_at": status_snapshot.checked_at if status_snapshot else "",
         "status_source": status_snapshot.source if status_snapshot else "",
