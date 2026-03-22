@@ -198,6 +198,7 @@ def test_build_chat_request_matches_qodercli_shape(tmp_path: Path) -> None:
     payload = client.build_chat_request(
         prompt="reply_ok",
         attachments=[],
+        messages=None,
         model_info=model_info,
         user_type="personal_standard",
         max_tokens=256,
@@ -236,6 +237,7 @@ def test_build_chat_request_with_image_attachment_matches_qodercli_shape(tmp_pat
     payload = client.build_chat_request(
         prompt="describe_image",
         attachments=[attachment],
+        messages=None,
         model_info=model_info,
         user_type="personal_standard",
         max_tokens=128,
@@ -304,3 +306,69 @@ def test_parse_chat_stream_line_unwraps_openai_sse_body(tmp_path: Path) -> None:
     assert parsed is not None
     assert parsed.text_delta == 'OK'
     assert terminal is False
+
+
+def test_build_chat_request_includes_tools_and_tool_choice(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+    model_info = QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat")
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "获取天气",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+
+    payload = client.build_chat_request(
+        prompt="请调用工具",
+        attachments=[],
+        messages=None,
+        model_info=model_info,
+        user_type="personal_standard",
+        max_tokens=128,
+        tools=tools,
+        tool_choice="auto",
+    )
+
+    assert payload["tools"] == tools
+    assert payload["tool_choice"] == "auto"
+
+
+def test_build_chat_request_uses_structured_messages(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+    model_info = QoderModelInfo(id="auto", display_name="Auto", scene="chat")
+    messages = [
+        {"role": "user", "content": "请调用工具"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"北京"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"city":"北京","weather":"晴"}'},
+    ]
+
+    payload = client.build_chat_request(
+        prompt="请继续回答",
+        attachments=[],
+        messages=messages,
+        model_info=model_info,
+        user_type="personal_standard",
+        max_tokens=128,
+    )
+
+    assert payload["messages"] == messages

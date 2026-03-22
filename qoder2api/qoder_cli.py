@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from .accounts import QoderAccount, QoderAccountPool
 from .catalog import QoderModelInfo, load_qoder_models, resolve_model_name
@@ -136,6 +136,7 @@ class QoderCLIInvoker:
         *,
         prompt: str,
         attachments: list[PreparedAttachment],
+        messages: list[dict[str, Any]] | None,
         model: str | None,
         max_tokens: int | None,
         preferred_account_id: str | None = None,
@@ -148,6 +149,7 @@ class QoderCLIInvoker:
                 qoder_home=context.qoder_home,
                 prompt=prompt,
                 attachments=attachments,
+                messages=messages,
                 model_info=model_info,
                 max_tokens=max_tokens,
             )
@@ -167,8 +169,11 @@ class QoderCLIInvoker:
         *,
         prompt: str,
         attachments: list[PreparedAttachment],
+        messages: list[dict[str, Any]] | None,
         model: str | None,
         max_tokens: int | None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         preferred_account_id: str | None = None,
     ) -> tuple[AsyncIterator[ParsedStreamEvent], str]:
         context = self.select_context(preferred_account_id=preferred_account_id)
@@ -181,10 +186,13 @@ class QoderCLIInvoker:
                     qoder_home=context.qoder_home,
                     prompt=prompt,
                     attachments=attachments,
+                    messages=messages,
                     model_info=model_info,
                     max_tokens=max_tokens,
+                    tools=tools,
+                    tool_choice=tool_choice,
                 ):
-                    if event.text_delta or event.finish_reason:
+                    if event.text_delta or event.tool_call_deltas or event.finish_reason:
                         yield event
             except QoderAPIError as exc:
                 raise QoderCLIError(

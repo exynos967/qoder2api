@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+ToolCallDelta = dict[str, Any]
+
+
 def _as_text(value: Any) -> str:
     if value is None:
         return ""
@@ -56,6 +59,8 @@ def _normalize_finish_reason(raw_value: Any) -> str | None:
         return "stop"
     if value in {"length", "max_tokens"}:
         return "length"
+    if value in {"tool_calls", "function_call"}:
+        return "tool_calls"
 
     return "stop"
 
@@ -92,12 +97,145 @@ def _extract_message_id(payload: dict[str, Any], current_message_id: str) -> str
     return current_message_id
 
 
+def _normalize_tool_call_delta_item(item: Any) -> ToolCallDelta | None:
+    if not isinstance(item, dict):
+        return None
+
+    normalized: ToolCallDelta = {}
+    index = item.get("index")
+    if isinstance(index, (int, float)):
+        normalized["index"] = int(index)
+    elif isinstance(index, str) and index.strip().isdigit():
+        normalized["index"] = int(index.strip())
+
+    tool_id = _as_text(item.get("id")).strip()
+    if tool_id:
+        normalized["id"] = tool_id
+
+    tool_type = _as_text(item.get("type")).strip()
+    if tool_type:
+        normalized["type"] = tool_type
+
+    function_payload = item.get("function")
+    if isinstance(function_payload, dict):
+        normalized_function: dict[str, str] = {}
+        function_name = _as_text(function_payload.get("name"))
+        if function_name:
+            normalized_function["name"] = function_name
+        function_arguments = _as_text(function_payload.get("arguments"))
+        if function_arguments:
+            normalized_function["arguments"] = function_arguments
+        if normalized_function:
+            normalized["function"] = normalized_function
+
+    return normalized or None
+
+
+def _extract_tool_call_deltas(delta_payload: Any) -> list[ToolCallDelta]:
+    if not isinstance(delta_payload, dict):
+        return []
+
+    raw_tool_calls = delta_payload.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return []
+
+    normalized: list[ToolCallDelta] = []
+    for item in raw_tool_calls:
+        tool_call = _normalize_tool_call_delta_item(item)
+        if tool_call is not None:
+            normalized.append(tool_call)
+    return normalized
+
+
+def _merge_chunk_text(current: str, chunk: str) -> str:
+    if not chunk:
+        return current
+    if not current:
+        return chunk
+    if current.endswith(chunk):
+        return current
+    return current + chunk
+
+
+def merge_tool_call_deltas(
+    current_tool_calls: list[ToolCallDelta],
+    delta_tool_calls: list[ToolCallDelta],
+) -> list[ToolCallDelta]:
+    """把流式 tool_call 增量合并成 OpenAI 最终结构。"""
+    merged: dict[int, ToolCallDelta] = {}
+
+    for index, item in enumerate(current_tool_calls):
+        key = int(item.get("index", index))
+        merged[key] = {
+            "index": key,
+            "id": _as_text(item.get("id")).strip(),
+            "type": _as_text(item.get("type")).strip() or "function",
+            "function": {
+                "name": _as_text((item.get("function") or {}).get("name")).strip(),
+                "arguments": _as_text((item.get("function") or {}).get("arguments")),
+            },
+        }
+
+    next_index = len(merged)
+    for item in delta_tool_calls:
+        key = int(item.get("index", next_index))
+        next_index = max(next_index, key + 1)
+        target = merged.setdefault(
+            key,
+            {
+                "index": key,
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        tool_id = _as_text(item.get("id")).strip()
+        if tool_id:
+            target["id"] = _merge_chunk_text(_as_text(target.get("id")), tool_id)
+
+        tool_type = _as_text(item.get("type")).strip()
+        if tool_type:
+            target["type"] = tool_type
+
+        function_payload = item.get("function") or {}
+        if isinstance(function_payload, dict):
+            target_function = target.setdefault("function", {"name": "", "arguments": ""})
+            function_name = _as_text(function_payload.get("name"))
+            if function_name:
+                target_function["name"] = _merge_chunk_text(
+                    _as_text(target_function.get("name")),
+                    function_name,
+                )
+            function_arguments = _as_text(function_payload.get("arguments"))
+            if function_arguments:
+                target_function["arguments"] = _merge_chunk_text(
+                    _as_text(target_function.get("arguments")),
+                    function_arguments,
+                )
+
+    finalized: list[ToolCallDelta] = []
+    for key in sorted(merged):
+        item = merged[key]
+        finalized.append(
+            {
+                "id": _as_text(item.get("id")).strip(),
+                "type": _as_text(item.get("type")).strip() or "function",
+                "function": {
+                    "name": _as_text((item.get("function") or {}).get("name")).strip(),
+                    "arguments": _as_text((item.get("function") or {}).get("arguments")),
+                },
+            }
+        )
+    return finalized
+
+
 @dataclass(slots=True)
 class ParsedStreamEvent:
     """解析后的单条 stream-json 事件。"""
 
     raw: dict[str, Any] = field(default_factory=dict)
     text_delta: str = ""
+    tool_call_deltas: list[ToolCallDelta] = field(default_factory=list)
     finish_reason: str | None = None
     error_message: str = ""
     error_type: str = "api_error"
@@ -232,7 +370,6 @@ class QoderStreamJSONParser:
 
         return event
 
-
     def _handle_openai_chunk(
         self,
         payload: dict[str, Any],
@@ -246,5 +383,6 @@ class QoderStreamJSONParser:
         first_choice = choices[0] if isinstance(choices[0], dict) else {}
         delta_payload = first_choice.get("delta")
         event.text_delta = self._append_delta(message_id, _join_text_blocks(delta_payload))
+        event.tool_call_deltas = _extract_tool_call_deltas(delta_payload)
         event.finish_reason = _normalize_finish_reason(first_choice.get("finish_reason"))
         return event

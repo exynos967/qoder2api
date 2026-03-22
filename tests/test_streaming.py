@@ -1,4 +1,4 @@
-from qoder2api.streaming import QoderStreamJSONParser
+from qoder2api.streaming import QoderStreamJSONParser, merge_tool_call_deltas
 
 
 def test_stream_json_parser_assistant_snapshot_diff() -> None:
@@ -77,7 +77,6 @@ def test_stream_json_parser_result_error() -> None:
     assert parsed.error_type == "api_error"
 
 
-
 def test_stream_json_parser_openai_chunk_delta() -> None:
     parser = QoderStreamJSONParser()
 
@@ -108,3 +107,100 @@ def test_stream_json_parser_openai_chunk_delta() -> None:
     assert first.text_delta == "你"
     assert second.text_delta == "好"
     assert second.finish_reason == "stop"
+
+
+def test_stream_json_parser_openai_chunk_tool_calls() -> None:
+    parser = QoderStreamJSONParser()
+
+    first = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "index": 0,
+                }
+            ],
+            "object": "chat.completion.chunk",
+        }
+    )
+    second = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "type": "function",
+                                "function": {"arguments": '{"city":"北京"}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                }
+            ],
+            "object": "chat.completion.chunk",
+        }
+    )
+
+    assert first.tool_call_deltas == [
+        {
+            "index": 0,
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather"},
+        }
+    ]
+    assert second.tool_call_deltas == [
+        {
+            "index": 0,
+            "type": "function",
+            "function": {"arguments": '{"city":"北京"}'},
+        }
+    ]
+    assert second.finish_reason == "tool_calls"
+
+
+def test_merge_tool_call_deltas_reconstructs_final_calls() -> None:
+    merged = merge_tool_call_deltas(
+        [],
+        [
+            {
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather"},
+            }
+        ],
+    )
+    merged = merge_tool_call_deltas(
+        merged,
+        [
+            {
+                "index": 0,
+                "type": "function",
+                "function": {"arguments": '{"city":"北京"}'},
+            }
+        ],
+    )
+
+    assert merged == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"city":"北京"}',
+            },
+        }
+    ]

@@ -33,6 +33,7 @@ from .login import QoderLoginError, QoderLoginManager
 from .prompting import PreparedPrompt, render_openai_messages
 from .qoder_api import QoderAPIClient, QoderAPIError
 from .qoder_cli import QoderCLIError, QoderCLIInvoker
+from .streaming import merge_tool_call_deltas
 from .runtime_settings import RuntimeSettingsManager
 from .schemas import (
     AccountLabelUpdateRequest,
@@ -563,9 +564,22 @@ def _build_completion_response(
     model: str,
     prompt: PreparedPrompt,
     output_text: str,
+    tool_calls: list[dict[str, Any]] | None = None,
+    finish_reason: str = "stop",
 ) -> dict[str, Any]:
+    normalized_tool_calls = list(tool_calls or [])
     prompt_tokens = _estimate_tokens(prompt.prompt)
-    completion_tokens = _estimate_tokens(output_text)
+    completion_basis = output_text
+    if not completion_basis and normalized_tool_calls:
+        completion_basis = json.dumps(normalized_tool_calls, ensure_ascii=False)
+    completion_tokens = _estimate_tokens(completion_basis)
+
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": output_text or None,
+    }
+    if normalized_tool_calls:
+        message["tool_calls"] = normalized_tool_calls
 
     return {
         "id": completion_id,
@@ -575,11 +589,8 @@ def _build_completion_response(
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": output_text,
-                },
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
@@ -588,6 +599,22 @@ def _build_completion_response(
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+
+
+async def _collect_stream_result(iterator) -> tuple[str, list[dict[str, Any]], str]:
+    output_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    finish_reason = "stop"
+
+    async for stream_event in iterator:
+        if stream_event.text_delta:
+            output_parts.append(stream_event.text_delta)
+        if stream_event.tool_call_deltas:
+            tool_calls = merge_tool_call_deltas(tool_calls, stream_event.tool_call_deltas)
+        if stream_event.finish_reason:
+            finish_reason = stream_event.finish_reason
+
+    return "".join(output_parts).strip(), tool_calls, finish_reason
 
 
 @app.post("/v1/chat/completions", response_model=None)
@@ -600,12 +627,27 @@ async def chat_completions(request: ChatCompletionRequest):
 
     if not request.stream:
         async with get_invocation_limiter().slot():
-            output_text, resolved_model = await invoker.run_text(
-                prompt=prompt.prompt,
-                attachments=prompt.attachments,
-                model=request.model,
-                max_tokens=request.max_tokens,
-            )
+            if request.tools:
+                iterator, resolved_model = await invoker.stream_events(
+                    prompt=prompt.prompt,
+                    attachments=prompt.attachments,
+                    messages=prompt.messages,
+                    model=request.model,
+                    max_tokens=request.max_tokens,
+                    tools=request.tools,
+                    tool_choice=request.tool_choice,
+                )
+                output_text, tool_calls, finish_reason = await _collect_stream_result(iterator)
+            else:
+                output_text, resolved_model = await invoker.run_text(
+                    prompt=prompt.prompt,
+                    attachments=prompt.attachments,
+                    messages=prompt.messages,
+                    model=request.model,
+                    max_tokens=request.max_tokens,
+                )
+                tool_calls = []
+                finish_reason = "stop"
         return JSONResponse(
             content=_build_completion_response(
                 completion_id=completion_id,
@@ -613,6 +655,8 @@ async def chat_completions(request: ChatCompletionRequest):
                 model=resolved_model,
                 prompt=prompt,
                 output_text=output_text,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
             )
         )
 
@@ -623,8 +667,11 @@ async def chat_completions(request: ChatCompletionRequest):
                 iterator, resolved_model = await invoker.stream_events(
                     prompt=prompt.prompt,
                     attachments=prompt.attachments,
+                    messages=prompt.messages,
                     model=request.model,
                     max_tokens=request.max_tokens,
+                    tools=request.tools,
+                    tool_choice=request.tool_choice,
                 )
 
                 finish_reason = "stop"
@@ -648,6 +695,23 @@ async def chat_completions(request: ChatCompletionRequest):
                 async for stream_event in iterator:
                     if stream_event.finish_reason:
                         finish_reason = stream_event.finish_reason
+
+                    if stream_event.tool_call_deltas:
+                        yield _sse_payload(
+                            {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": resolved_model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"tool_calls": stream_event.tool_call_deltas},
+                                        "finish_reason": None,
+                                    }
+                                ],
+                            }
+                        )
 
                     if not stream_event.text_delta:
                         continue

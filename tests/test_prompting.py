@@ -88,3 +88,47 @@ def test_render_openai_messages_rejects_http_image() -> None:
         )
 
     assert "本地图片附件或 data URL" in str(exc_info.value)
+
+
+def test_render_openai_messages_builds_structured_tool_history() -> None:
+    prepared = render_openai_messages(
+        [
+            ChatMessage(role="user", content="请调用工具"),
+            ChatMessage(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"北京"}'},
+                    }
+                ],
+            ),
+            ChatMessage(
+                role="tool",
+                tool_call_id="call_1",
+                content='{"city":"北京","weather":"晴"}',
+            ),
+        ]
+    )
+
+    assert prepared.messages == [
+        {"role": "user", "content": "请调用工具"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"北京"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": '{"city":"北京","weather":"晴"}',
+        },
+    ]

@@ -398,6 +398,7 @@ class QoderAPIClient:
         qoder_home: Path,
         prompt: str,
         attachments: list[PreparedAttachment],
+        messages: list[dict[str, Any]] | None,
         model_info: QoderModelInfo,
         max_tokens: int | None,
     ) -> str:
@@ -406,6 +407,7 @@ class QoderAPIClient:
             qoder_home=qoder_home,
             prompt=prompt,
             attachments=attachments,
+            messages=messages,
             model_info=model_info,
             max_tokens=max_tokens,
         ):
@@ -419,16 +421,22 @@ class QoderAPIClient:
         qoder_home: Path,
         prompt: str,
         attachments: list[PreparedAttachment],
+        messages: list[dict[str, Any]] | None,
         model_info: QoderModelInfo,
         max_tokens: int | None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[ParsedStreamEvent]:
         cached = await self.ensure_cached_user(qoder_home)
         request_body = self.build_chat_request(
             prompt=prompt,
             attachments=attachments,
+            messages=messages,
             model_info=model_info,
             user_type=cached.user_type,
             max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
         )
         raw_body_text = json.dumps(request_body, ensure_ascii=False, separators=(",", ":"))
         encoded_body_text = encode_request_body(raw_body_text)
@@ -686,9 +694,12 @@ class QoderAPIClient:
         *,
         prompt: str,
         attachments: list[PreparedAttachment],
+        messages: list[dict[str, Any]] | None,
         model_info: QoderModelInfo,
         user_type: str,
         max_tokens: int | None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request_id = str(uuid.uuid4())
         request_set_id = str(uuid.uuid4())
@@ -734,8 +745,8 @@ class QoderAPIClient:
             "taskId": _DEFAULT_TASK_ID,
             "model_config": model_config,
             "customModel": None,
-            "messages": [self._build_user_message(prompt=prompt, attachments=attachments)],
-            "tools": [],
+            "messages": list(messages) if messages else [self._build_user_message(prompt=prompt, attachments=attachments)],
+            "tools": list(tools or []),
             "mode": "",
             "passkey": "",
             "lineUpType": "",
@@ -744,6 +755,8 @@ class QoderAPIClient:
         }
         if max_tokens:
             request_body["parameters"] = {"max_tokens": int(max_tokens)}
+        if tool_choice is not None:
+            request_body["tool_choice"] = tool_choice
         return request_body
 
     def build_chat_headers(

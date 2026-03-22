@@ -52,6 +52,7 @@ class PreparedPrompt:
 
     prompt: str
     attachments: list[PreparedAttachment]
+    messages: list[dict[str, Any]]
 
 
 def _inline_image_name(mime_type: str) -> str:
@@ -150,6 +151,88 @@ def _extract_image_url(item: dict[str, Any]) -> str | None:
     return str(raw_image)
 
 
+def _normalize_message_text_content(content: str | list[dict[str, Any]] | None) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+
+    parts: list[str] = []
+    for item in content:
+        block_type = str(item.get("type") or "").strip()
+        if block_type in {"text", "input_text"}:
+            block_text = str(item.get("text") or "").strip()
+            if block_text:
+                parts.append(block_text)
+    return "\n".join(parts).strip()
+
+
+def _build_message_contents(
+    content: str | list[dict[str, Any]] | None,
+    attachments: list[PreparedAttachment],
+) -> list[dict[str, Any]]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        normalized = content.strip()
+        return [{"type": "text", "text": normalized}] if normalized else []
+
+    contents: list[dict[str, Any]] = []
+    for item in content:
+        block_type = str(item.get("type") or "").strip()
+        if block_type in {"text", "input_text"}:
+            block_text = str(item.get("text") or "").strip()
+            if block_text:
+                contents.append({"type": "text", "text": block_text})
+            continue
+
+        if block_type in {"image_url", "input_image"}:
+            attachment = _resolve_local_attachment(_extract_image_url(item))
+            _append_unique_attachment(attachments, attachment)
+            contents.append({"type": "image_url", "image_url": {"url": attachment.url}})
+            if attachment.local_path is not None:
+                contents.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"<system-reminder>\n\nabove is an image file in {attachment.local_path}"
+                            "\n\n</system-reminder>"
+                        ),
+                    }
+                )
+            continue
+
+        contents.append(item)
+    return contents
+
+
+def _build_upstream_message(
+    message: ChatMessage,
+    attachments: list[PreparedAttachment],
+) -> dict[str, Any]:
+    upstream: dict[str, Any] = {"role": message.role}
+    if message.name:
+        upstream["name"] = message.name
+    if message.tool_call_id:
+        upstream["tool_call_id"] = message.tool_call_id
+    if message.tool_calls:
+        upstream["tool_calls"] = message.tool_calls
+
+    if isinstance(message.content, list):
+        contents = _build_message_contents(message.content, attachments)
+        upstream["content"] = _normalize_message_text_content(message.content)
+        if contents:
+            upstream["contents"] = contents
+        return upstream
+
+    normalized_text = _normalize_message_text_content(message.content)
+    if normalized_text or message.role != "assistant" or not message.tool_calls:
+        upstream["content"] = normalized_text
+    else:
+        upstream["content"] = ""
+    return upstream
+
+
 def _content_to_text(
     content: str | list[dict[str, Any]] | None,
     attachments: list[PreparedAttachment],
@@ -236,8 +319,10 @@ def render_openai_messages(
     attachments: list[PreparedAttachment] = []
     system_blocks: list[str] = []
     dialogue_blocks: list[str] = []
+    upstream_messages: list[dict[str, Any]] = []
 
     for message in messages:
+        upstream_messages.append(_build_upstream_message(message, attachments))
         rendered = _render_message_block(message, attachments)
         if message.role == "system":
             system_blocks.append(rendered)
@@ -277,4 +362,5 @@ def render_openai_messages(
     return PreparedPrompt(
         prompt="\n".join(prompt_lines).strip(),
         attachments=attachments,
+        messages=upstream_messages,
     )

@@ -17,11 +17,12 @@ def test_run_text_uses_protocol_client_by_default(tmp_path: Path) -> None:
     settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
     invoker = QoderCLIInvoker(settings)
 
-    async def fake_run_text(*, qoder_home, prompt, attachments, model_info, max_tokens):
+    async def fake_run_text(*, qoder_home, prompt, attachments, messages, model_info, max_tokens):
         assert qoder_home == settings.qoder_home_path
         assert prompt == "hello"
         assert attachments == []
         assert model_info.id == "auto"
+        assert messages == [{"role": "user", "content": "hello"}]
         assert max_tokens == 32
         return "ok"
 
@@ -31,6 +32,7 @@ def test_run_text_uses_protocol_client_by_default(tmp_path: Path) -> None:
         invoker.run_text(
             prompt="hello",
             attachments=[],
+            messages=[{"role": "user", "content": "hello"}],
             model="auto",
             max_tokens=32,
         )
@@ -46,34 +48,95 @@ def test_stream_events_uses_protocol_stream(tmp_path: Path) -> None:
     settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
     invoker = QoderCLIInvoker(settings)
 
-    async def fake_stream_chat(*, qoder_home, prompt, attachments, model_info, max_tokens):
+    async def fake_stream_chat(*, qoder_home, prompt, attachments, messages, model_info, max_tokens, tools, tool_choice):
         assert qoder_home == settings.qoder_home_path
         assert prompt == "hello"
         assert attachments == []
         assert model_info.id == "auto"
+        assert messages == [{"role": "user", "content": "hello"}]
         assert max_tokens == 64
+        assert tools is None
+        assert tool_choice is None
         yield ParsedStreamEvent(text_delta="o")
         yield ParsedStreamEvent(text_delta="k")
         yield ParsedStreamEvent(text_delta="", finish_reason="stop")
 
     invoker.api_client.stream_chat = fake_stream_chat  # type: ignore[method-assign]
 
-    async def collect() -> tuple[list[tuple[str, str | None]], str]:
+    async def collect() -> tuple[list[tuple[str, list[dict], str | None]], str]:
         iterator, resolved_model = await invoker.stream_events(
             prompt="hello",
             attachments=[],
+            messages=[{"role": "user", "content": "hello"}],
             model="auto",
             max_tokens=64,
         )
-        events: list[tuple[str, str | None]] = []
+        events: list[tuple[str, list[dict], str | None]] = []
         async for event in iterator:
-            events.append((event.text_delta, event.finish_reason))
+            events.append((event.text_delta, event.tool_call_deltas, event.finish_reason))
         return events, resolved_model
 
     events, resolved_model = asyncio.run(collect())
 
-    assert events == [("o", None), ("k", None), ("", "stop")]
+    assert events == [("o", [], None), ("k", [], None), ("", [], "stop")]
     assert resolved_model == "auto"
+
+
+def test_stream_events_keeps_tool_call_deltas(tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    invoker = QoderCLIInvoker(settings)
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+
+    async def fake_stream_chat(*, qoder_home, prompt, attachments, messages, model_info, max_tokens, tools, tool_choice):
+        assert tools == [{"type": "function", "function": {"name": "get_weather"}}]
+        assert tool_choice == "auto"
+        yield ParsedStreamEvent(
+            tool_call_deltas=[
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather"},
+                }
+            ]
+        )
+        yield ParsedStreamEvent(finish_reason="tool_calls")
+
+    invoker.api_client.stream_chat = fake_stream_chat  # type: ignore[method-assign]
+
+    async def collect() -> list[tuple[str, list[dict], str | None]]:
+        iterator, _ = await invoker.stream_events(
+            prompt="hello",
+            attachments=[],
+            messages=[{"role": "user", "content": "hello"}],
+            model="auto",
+            max_tokens=64,
+            tools=tools,
+            tool_choice="auto",
+        )
+        items = []
+        async for event in iterator:
+            items.append((event.text_delta, event.tool_call_deltas, event.finish_reason))
+        return items
+
+    items = asyncio.run(collect())
+
+    assert items == [
+        (
+            "",
+            [
+                {
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather"},
+                }
+            ],
+            None,
+        ),
+        ("", [], "tool_calls"),
+    ]
 
 
 def test_run_text_rewraps_protocol_error(tmp_path: Path) -> None:
@@ -81,7 +144,7 @@ def test_run_text_rewraps_protocol_error(tmp_path: Path) -> None:
     settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
     invoker = QoderCLIInvoker(settings)
 
-    async def fake_run_text(*, qoder_home, prompt, attachments, model_info, max_tokens):
+    async def fake_run_text(*, qoder_home, prompt, attachments, messages, model_info, max_tokens):
         raise QoderAPIError(
             "auth failed",
             status_code=401,
@@ -95,6 +158,7 @@ def test_run_text_rewraps_protocol_error(tmp_path: Path) -> None:
             invoker.run_text(
                 prompt="hello",
                 attachments=[],
+                messages=[{"role": "user", "content": "hello"}],
                 model="auto",
                 max_tokens=32,
             )
@@ -127,10 +191,11 @@ def test_run_text_supports_attachments_for_vl_model(tmp_path: Path) -> None:
         local_path=tmp_path / 'demo.png',
     )
 
-    async def fake_run_text(*, qoder_home, prompt, attachments, model_info, max_tokens):
+    async def fake_run_text(*, qoder_home, prompt, attachments, messages, model_info, max_tokens):
         assert qoder_home == settings.qoder_home_path
         assert prompt == 'hello'
         assert attachments == [attachment]
+        assert messages == [{"role": "user", "content": "hello"}]
         assert model_info.id == 'kmodel'
         return 'ok'
 
@@ -140,6 +205,7 @@ def test_run_text_supports_attachments_for_vl_model(tmp_path: Path) -> None:
         invoker.run_text(
             prompt='hello',
             attachments=[attachment],
+            messages=[{"role": "user", "content": "hello"}],
             model='kmodel',
             max_tokens=32,
         )
@@ -160,6 +226,7 @@ def test_run_text_rejects_attachments_for_non_vl_model(tmp_path: Path) -> None:
             invoker.run_text(
                 prompt='hello',
                 attachments=[attachment],
+                messages=[{"role": "user", "content": "hello"}],
                 model='auto',
                 max_tokens=32,
             )
