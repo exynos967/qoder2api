@@ -69,7 +69,7 @@ body {
 }
 
 .sidebar {
-  width: 260px;
+  width: 232px;
   flex-shrink: 0;
   background-color: var(--c-white);
   border-right: 1px solid var(--c-gray-200);
@@ -181,20 +181,20 @@ body {
 }
 
 .topbar {
-  height: 64px;
+  min-height: 84px;
   background-color: var(--c-white);
   border-bottom: 1px solid var(--c-gray-200);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 32px;
+  padding: 18px 32px;
   flex-shrink: 0;
 }
 
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  padding: 40px 32px 32px;
 }
 
 .section {
@@ -216,23 +216,27 @@ body {
 }
 .models-grid, .logs-grid { grid-template-columns: 2fr 1fr; }
 .playground-grid { grid-template-columns: 1fr 1fr; }
+.stack-grid { grid-template-columns: 1fr; }
 @media (max-width: 1024px) {
   .surface-grid { grid-template-columns: 1fr; }
 }
 
 /* Brand */
 .brand-lockup { display: flex; flex-direction: column; gap: 4px; }
+.brand-lockup-compact { gap: 12px; }
+.brand-lockup-inline { flex-direction: row; align-items: center; gap: 14px; }
 .brand-title-row { display: flex; align-items: center; gap: 8px; }
 .brand-title-row h2 { font-weight: 700; font-size: 20px; color: var(--c-gray-900); letter-spacing: -0.5px; }
+.brand-title-row-large h2 { font-size: 26px; line-height: 1; letter-spacing: -0.8px; }
 .brand-badge { padding: 2px 6px; background-color: var(--c-primary-100); color: var(--c-primary-700); font-size: 10px; font-weight: 700; border-radius: 4px; }
 .brand-kicker { font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: var(--c-gray-400); text-transform: uppercase; }
 .brand-note { font-size: 12px; color: var(--c-gray-500); margin-top: 8px; line-height: 1.5; }
 
 /* Typography */
-.page-kicker { font-size: 10px; font-weight: 600; color: var(--c-primary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-.page-subtitle { font-size: 14px; color: var(--c-gray-500); margin-top: 2px; }
+.page-kicker { display: none; }
+.page-subtitle { display: none; font-size: 14px; color: var(--c-gray-500); margin-top: 2px; }
 .section-intro { font-size: 13px; color: var(--c-gray-500); margin-top: 4px; }
-#page-title { font-size: 24px; font-weight: 600; color: var(--c-gray-900); }
+#page-title { font-size: 30px; font-weight: 700; color: var(--c-gray-900); line-height: 1.1; }
 
 /* Cards */
 .card {
@@ -433,9 +437,24 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 .tone-warning { background-color: var(--c-warning-50); color: var(--c-warning-700); border-color: var(--c-warning-200); }
 
 .table-badge-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-.account-actions-group { display: flex; items-center; gap: 8px; flex-wrap: wrap; }
+.account-actions-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .is-active { background-color: rgba(238, 242, 255, 0.5) !important; }
 .is-busy { opacity: 0.6; pointer-events: none; }
+.running {
+  background-color: var(--c-success-50);
+  color: var(--c-success-700);
+  border-color: var(--c-success-200);
+}
+.stopped {
+  background-color: var(--c-error-50);
+  color: var(--c-error-700);
+  border-color: var(--c-error-200);
+}
+.starting {
+  background-color: var(--c-warning-50);
+  color: var(--c-warning-700);
+  border-color: var(--c-warning-200);
+}
 
 /* Quota Progress */
 .quota-progress-row {
@@ -549,6 +568,101 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
   font-weight: 600;
 }
 
+/* Dashboard detail */
+.dashboard-grid,
+.dashboard-detail-grid {
+  display: grid;
+  gap: 24px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.status-item {
+  padding: 16px;
+  border: 1px solid var(--c-gray-200);
+  border-radius: var(--radius-lg);
+  background-color: var(--c-gray-50);
+  min-width: 0;
+}
+
+.status-label {
+  display: block;
+  font-size: 12px;
+  color: var(--c-gray-500);
+  margin-bottom: 8px;
+}
+
+.status-item strong {
+  display: block;
+  color: var(--c-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.monitor-card .card-body {
+  display: flex;
+}
+
+.monitor-panel {
+  width: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--c-gray-200);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 20px;
+}
+
+.monitor-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--c-gray-200);
+}
+
+.monitor-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--c-gray-500);
+  text-transform: uppercase;
+}
+
+.monitor-hero strong {
+  font-size: 24px;
+  line-height: 1.2;
+  color: var(--c-gray-900);
+}
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.monitor-grid div {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background-color: var(--c-white);
+  border: 1px solid var(--c-gray-200);
+}
+
+.monitor-grid span {
+  display: block;
+  font-size: 11px;
+  color: var(--c-gray-500);
+  margin-bottom: 6px;
+}
+
+.monitor-grid strong {
+  font-size: 13px;
+  color: var(--c-gray-800);
+}
+
 /* Utilities */
 .mono-inline {
   font-family: 'Fira Code', monospace;
@@ -589,12 +703,13 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 /* Brand Mark (Sidebar) */
 .brand-mark {
   position: relative;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   background: linear-gradient(135deg, var(--c-primary-100), var(--c-primary-50));
   border: 1px solid var(--c-primary-200);
-  margin-bottom: 12px;
+  margin-bottom: 0;
+  flex-shrink: 0;
   box-shadow: inset 0 2px 4px rgba(255,255,255,0.5), 0 2px 8px rgba(79, 70, 229, 0.08);
 }
 .brand-mark-core, .brand-mark-ring {

@@ -12,19 +12,16 @@
     <div id="main-page" class="page active">
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="brand-lockup">
+                <div class="brand-lockup brand-lockup-compact brand-lockup-inline">
                     <div class="brand-mark" aria-hidden="true">
                         <span class="brand-mark-core"></span>
                         <span class="brand-mark-ring brand-mark-ring-a"></span>
                         <span class="brand-mark-ring brand-mark-ring-b"></span>
                     </div>
                     <div class="brand-heading">
-                        <div class="brand-kicker">Qoder Account Pool</div>
-                        <div class="brand-title-row">
-                            <h2>qoder2api</h2>
-                            <span class="brand-badge">POOL</span>
+                        <div class="brand-title-row brand-title-row-large">
+                            <h2>Qoder2API</h2>
                         </div>
-                        <p class="brand-note">多账号登录态、模型能力与试用资格统一编排。</p>
                     </div>
                 </div>
             </div>
@@ -119,9 +116,8 @@
         <main class="main-content">
             <header class="topbar">
                 <div class="topbar-left">
-                    <div class="page-kicker">Operations Console</div>
                     <h1 id="page-title">仪表盘</h1>
-                    <p id="page-subtitle" class="page-subtitle">多账号轮询概览</p>
+                    <p id="page-subtitle" class="page-subtitle" hidden aria-hidden="true">多账号轮询概览</p>
                 </div>
                 <div class="topbar-right">
                     <div class="topbar-brand-chip">
@@ -140,42 +136,107 @@
 
             <div class="content">
                 <section id="dashboard-section" class="section active">
-                    <div class="card full-width dashboard-summary-card">
-                        <div class="card-header dashboard-summary-header">
-                            <div>
-                                <span>实时概览</span>
+                    <div class="surface-grid dashboard-grid">
+                        <div class="card full-width dashboard-summary-card">
+                            <div class="card-header dashboard-summary-header">
+                                <div>
+                                    <span>实时概览</span>
+                                    <p class="section-intro">优先突出账号池可用性、并发占用与额度状态。</p>
+                                </div>
+                                <div class="header-actions">
+                                    <span id="dashboard-concurrency-pill" class="table-badge tone-neutral">并发 --</span>
+                                    <span id="dashboard-proxy-pill" class="table-badge tone-muted">代理未配置</span>
+                                    <button id="dashboard-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
+                                </div>
                             </div>
-                            <div class="header-actions">
-                                <button id="dashboard-refresh-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>刷新</span></button>
+                            <div class="card-body">
+                                <div class="metrics-grid dashboard-metrics-grid">
+                                    <article class="metric-tile">
+                                        <span class="metric-label">启用账号</span>
+                                        <div id="dashboard-enabled-count" class="big-number">0</div>
+                                        <p class="hint">总数 <span id="dashboard-accounts-total">0</span></p>
+                                    </article>
+                                    <article class="metric-tile">
+                                        <span class="metric-label">模型数量</span>
+                                        <div id="models-count" class="big-number">0</div>
+                                        <p class="hint">当前开放模型</p>
+                                    </article>
+                                    <article class="metric-tile">
+                                        <span class="metric-label">运行中请求</span>
+                                        <div id="dashboard-active-requests" class="big-number">0</div>
+                                        <p class="hint">并发上限 <span id="dashboard-concurrency-limit">--</span></p>
+                                    </article>
+                                    <article class="metric-tile">
+                                        <span class="metric-label">账号池总额度</span>
+                                        <div id="dashboard-quota-total" class="big-number">--</div>
+                                        <p id="dashboard-quota-total-hint" class="hint">暂无额度数据</p>
+                                    </article>
+                                    <article class="metric-tile">
+                                        <span class="metric-label">账号池剩余额度</span>
+                                        <div id="dashboard-quota-remaining" class="big-number">--</div>
+                                        <p id="dashboard-quota-remaining-hint" class="hint">等待状态刷新</p>
+                                    </article>
+                                </div>
                             </div>
                         </div>
-                        <div class="card-body">
-                            <div class="metrics-grid dashboard-metrics-grid">
-                                <article class="metric-tile">
-                                    <span class="metric-label">启用账号</span>
-                                    <div id="dashboard-enabled-count" class="big-number">0</div>
-                                    <p class="hint">总数 <span id="dashboard-accounts-total">0</span></p>
-                                </article>
-                                <article class="metric-tile">
-                                    <span class="metric-label">模型数量</span>
-                                    <div id="models-count" class="big-number">0</div>
-                                    <p class="hint">当前开放模型</p>
-                                </article>
-                                <article class="metric-tile">
-                                    <span class="metric-label">运行中请求</span>
-                                    <div id="dashboard-active-requests" class="big-number">0</div>
-                                    <p class="hint">并发上限 <span id="dashboard-concurrency-limit">--</span></p>
-                                </article>
-                                <article class="metric-tile">
-                                    <span class="metric-label">账号池总额度</span>
-                                    <div id="dashboard-quota-total" class="big-number">--</div>
-                                    <p id="dashboard-quota-total-hint" class="hint">暂无额度数据</p>
-                                </article>
-                                <article class="metric-tile">
-                                    <span class="metric-label">账号池剩余额度</span>
-                                    <div id="dashboard-quota-remaining" class="big-number">--</div>
-                                    <p id="dashboard-quota-remaining-hint" class="hint">等待状态刷新</p>
-                                </article>
+
+                        <div class="surface-grid dashboard-detail-grid">
+                            <div class="card surface-main">
+                                <div class="card-header">
+                                    <div>
+                                        <span>系统状态</span>
+                                        <p class="section-intro">保留 app.js 已有运行指标，方便快速诊断。</p>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div class="status-grid">
+                                        <article class="status-item">
+                                            <span class="status-label">服务状态</span>
+                                            <strong id="health-status">--</strong>
+                                        </article>
+                                        <article class="status-item">
+                                            <span class="status-label">版本</span>
+                                            <strong id="health-version">--</strong>
+                                        </article>
+                                        <article class="status-item">
+                                            <span class="status-label">代理状态</span>
+                                            <strong id="dashboard-proxy-status">--</strong>
+                                        </article>
+                                        <article class="status-item">
+                                            <span class="status-label">llmapi Key</span>
+                                            <strong id="dashboard-llmapi-status">--</strong>
+                                        </article>
+                                        <article class="status-item">
+                                            <span class="status-label">并发占用</span>
+                                            <strong id="dashboard-concurrency-text">--</strong>
+                                        </article>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card surface-side monitor-card">
+                                <div class="card-header">
+                                    <div>
+                                        <span>池监控摘要</span>
+                                        <p class="section-intro">以紧凑方式汇总账号池 readiness。</p>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div class="monitor-panel">
+                                        <div class="monitor-hero">
+                                            <span class="monitor-label">POOL STATE</span>
+                                            <strong id="dashboard-monitor-status">WAITING AUTH</strong>
+                                        </div>
+                                        <div class="monitor-grid">
+                                            <div><span>账号</span><strong id="dashboard-monitor-accounts">0 / 0</strong></div>
+                                            <div><span>活跃请求</span><strong id="dashboard-monitor-active">0 req</strong></div>
+                                            <div><span>在线模型</span><strong id="dashboard-monitor-models">0 online</strong></div>
+                                            <div><span>llmapi</span><strong id="dashboard-monitor-llmapi">未配置</strong></div>
+                                            <div><span>并发上限</span><strong id="dashboard-monitor-concurrency">--</strong></div>
+                                            <div><span>代理</span><strong id="dashboard-monitor-proxy">未配置</strong></div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -226,7 +287,7 @@
                 </section>
 
                 <section id="models-section" class="section">
-                    <div class="surface-grid models-grid">
+                    <div class="surface-grid stack-grid">
                         <div class="card surface-main">
                             <div class="card-header">
                                 <div>
@@ -282,7 +343,7 @@
                                         <input type="number" id="settings-account-pool-max-concurrency" min="1" max="512" placeholder="4">
                                     </div>
                                     <p class="hint">保存后会立即作用于新的上游请求；代理地址会同步写入当前进程环境变量。</p>
-                                    <p class="hint">设置文件：<span id="settings-runtime-path" class="mono-inline">--</span></p>
+                                    <span id="settings-runtime-path" hidden aria-hidden="true">--</span>
                                     <p id="settings-runtime-status" class="hint">加载中...</p>
                                     <div class="actions-bar compact-actions">
                                         <button type="submit" id="settings-save-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></span><span>保存设置</span></button>
@@ -294,7 +355,7 @@
                 </section>
 
                 <section id="playground-section" class="section">
-                    <div class="surface-grid playground-grid">
+                    <div class="surface-grid stack-grid">
                         <div class="card surface-main">
                             <div class="card-header">
                                 <div>
@@ -347,7 +408,7 @@
                 </section>
 
                 <section id="logs-section" class="section">
-                    <div class="surface-grid logs-grid">
+                    <div class="surface-grid stack-grid">
                         <div class="card surface-main terminal-card">
                             <div class="card-header">
                                 <div>

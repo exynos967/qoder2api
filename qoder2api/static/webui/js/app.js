@@ -201,7 +201,15 @@ function updateTopbarSummary() {
     const limit = state.runtimeSettings?.account_pool_max_concurrency ?? health.account_pool_max_concurrency ?? '--';
     const active = health.active_requests ?? 0;
     const summary = `${enabled}/${total} 启用 · ${active} 活跃 · 上限 ${limit}`;
+    const summaryElement = $('topbar-summary');
     setText('topbar-summary', summary);
+    if (summaryElement?.parentElement) {
+        if (enabled > 0) {
+            summaryElement.parentElement.dataset.state = 'ready';
+        } else {
+            summaryElement.parentElement.dataset.state = 'warning';
+        }
+    }
     setDataState('topbar-summary', enabled > 0 ? 'ready' : 'warning');
 }
 
@@ -341,10 +349,8 @@ function renderOverview(data) {
 
     state.overview = data;
 
-    setText('health-status', health.status || '--');
+    setText('health-status', String(health.status || '--').toUpperCase());
     setText('health-version', health.version || '--');
-    setText('health-infer-endpoint', health.infer_endpoint || '--');
-    setText('health-openapi-endpoint', health.openapi_endpoint || '--');
     setText('models-count', String(health.models || 0));
 
     setText('dashboard-enabled-count', String(enabledAccounts));
