@@ -155,6 +155,9 @@ class QoderStreamJSONParser:
         if event_type == "stream_event":
             return self._handle_stream_event(payload, message_id)
 
+        if isinstance(payload.get("choices"), list):
+            return self._handle_openai_chunk(payload, message_id)
+
         if event_type == "assistant":
             message_payload = payload.get("message") if isinstance(payload.get("message"), dict) else payload
             snapshot_text = _join_text_blocks(message_payload)
@@ -227,4 +230,21 @@ class QoderStreamJSONParser:
             event.finish_reason = "stop"
             return event
 
+        return event
+
+
+    def _handle_openai_chunk(
+        self,
+        payload: dict[str, Any],
+        message_id: str,
+    ) -> ParsedStreamEvent:
+        event = ParsedStreamEvent(raw=payload)
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return event
+
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        delta_payload = first_choice.get("delta")
+        event.text_delta = self._append_delta(message_id, _join_text_blocks(delta_payload))
+        event.finish_reason = _normalize_finish_reason(first_choice.get("finish_reason"))
         return event

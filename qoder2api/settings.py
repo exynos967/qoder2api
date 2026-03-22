@@ -39,41 +39,6 @@ def discover_qoder_home(
     return (Path.home() / ".qoder").resolve()
 
 
-def discover_qoder_cli_path(qoder_home: Path, explicit: str | None = None) -> Path:
-    """兼容保留：发现 Qoder CLI 可执行文件。"""
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-
-    direct_candidate = qoder_home / "bin" / "qodercli"
-    if direct_candidate.is_file():
-        return direct_candidate.resolve()
-
-    version_dir = qoder_home / "bin" / "qodercli"
-    if version_dir.is_dir():
-        candidates = [
-            path
-            for path in version_dir.iterdir()
-            if path.is_file() and path.name.startswith("qodercli-")
-        ]
-        if candidates:
-            candidates.sort(key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
-            return candidates[0].resolve()
-
-    recursive_candidates = [
-        path
-        for path in qoder_home.rglob("qodercli*")
-        if path.is_file() and "bin" in path.parts
-    ]
-    if recursive_candidates:
-        recursive_candidates.sort(
-            key=lambda path: (path.stat().st_mtime, path.name),
-            reverse=True,
-        )
-        return recursive_candidates[0].resolve()
-
-    return direct_candidate.resolve()
-
-
 def discover_workspace(explicit: str | None, qoder_home: Path) -> Path:
     """默认把 `.qoder` 所在目录当成工作区根目录。"""
     if explicit:
@@ -156,7 +121,6 @@ class Settings(BaseSettings):
     port: int = Field(default=28001, ge=1, le=65535)
 
     qoder_home: str | None = None
-    qoder_cli_path: str | None = None
     workspace: str | None = None
 
     qoder_infer_endpoint: str | None = None
@@ -185,10 +149,6 @@ class Settings(BaseSettings):
     @property
     def qoder_home_path(self) -> Path:
         return discover_qoder_home(self.qoder_home)
-
-    @property
-    def cli_executable(self) -> Path:
-        return discover_qoder_cli_path(self.qoder_home_path, self.qoder_cli_path)
 
     @property
     def workspace_path(self) -> Path:

@@ -24,6 +24,11 @@ XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----
 """
 
+_CUSTOM_B64_ALPHABET = b"_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!"
+_STANDARD_B64_ALPHABET = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+_CUSTOM_B64_PAD = b"$"
+_STD_TO_CUSTOM_B64 = bytes.maketrans(_STANDARD_B64_ALPHABET, _CUSTOM_B64_ALPHABET)
+
 
 def derive_machine_cipher_key(machine_id: str) -> str:
     """取 Qoder machine_id 的前 16 个字符作为 AES key/iv。"""
@@ -92,13 +97,34 @@ def _generate_temp_aes_key() -> str:
 
 
 def generate_auth_fields(cached_user: Mapping[str, Any] | Any) -> tuple[str, str]:
-    """生成 `encrypt_user_info` 和 `key`。"""
+    """生成官方 COSY 鉴权需要的 `encrypt_user_info` 和加密临时 key。"""
     payload = _normalize_mapping(cached_user)
+    payload.pop("encrypt_user_info", None)
+    payload.pop("key", None)
     temp_key = _generate_temp_aes_key()
     plain = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encrypt_user_info = aes_encrypt_base64(plain, temp_key)
     encrypted_key = rsa_encrypt_base64(temp_key.encode("utf-8"))
     return encrypt_user_info, encrypted_key
+
+
+def _custom_base64_rotation_steps(length: int) -> int:
+    if length <= 1:
+        return 0
+    return length // 3
+
+
+def encode_request_body(body_text: str) -> str:
+    """按 Qoder POST `Encode=1` 规则编码请求体。"""
+    encoded = (
+        base64.b64encode(body_text.encode("utf-8"))
+        .translate(_STD_TO_CUSTOM_B64)
+        .replace(b"=", _CUSTOM_B64_PAD)
+    )
+    chunk = _custom_base64_rotation_steps(len(encoded))
+    if chunk == 0:
+        return encoded.decode("utf-8")
+    return (encoded[-chunk:] + encoded[chunk:-chunk] + encoded[:chunk]).decode("utf-8")
 
 
 def build_auth_payload(
@@ -146,12 +172,14 @@ def build_bearer_token(
     path: str,
     ide_version: str = "",
     client_version: str = _DEFAULT_CLIENT_VERSION,
+    cosy_version: str = _DEFAULT_COSY_VERSION,
 ) -> tuple[str, str]:
     """返回 `(payload, authorization)`。"""
     payload = build_auth_payload(
         encrypt_user_info,
         ide_version=ide_version,
         client_version=client_version,
+        cosy_version=cosy_version,
     )
     signature = build_auth_signature(payload, key=key, date=date, body=body, path=path)
     return payload, f"Bearer COSY.{payload}.{signature}"

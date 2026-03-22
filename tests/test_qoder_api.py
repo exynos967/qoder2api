@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import base64
 import json
 from pathlib import Path
@@ -6,8 +7,10 @@ from pathlib import Path
 import httpx
 
 from qoder2api.auth_state import load_cached_user_info, load_machine_id
+from qoder2api.catalog import QoderModelInfo
 from qoder2api.qoder_api import QoderAPIClient
 from qoder2api.settings import Settings
+from qoder2api.streaming import QoderStreamJSONParser
 from tests.helpers import prepare_qoder_home
 
 
@@ -149,28 +152,96 @@ def test_build_chat_headers_matches_official_qoder_shape(tmp_path: Path) -> None
     cached = load_cached_user_info(qoder_home)
     assert cached is not None
 
+    model_info = QoderModelInfo(
+        id='auto',
+        display_name='Auto',
+        scene='chat',
+    )
     headers = client.build_chat_headers(
         qoder_home=qoder_home,
         cached_user=cached,
         body_text='{"demo":true}',
         path='/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1',
+        model_info=model_info,
     )
 
     assert headers['User-Agent'] == 'Go-http-client/2.0'
     assert headers['Accept'] == 'text/event-stream'
-    assert headers['Accept-Encoding'] == 'identity'
-    assert headers['Cosy-Version'] == '0.14.2'
+    assert headers['Accept-Encoding'] == 'gzip'
+    assert headers['Cosy-Version'] == settings.client_version
     assert headers['Cosy-Data-Policy'] == 'DISAGREE'
-    assert headers['Cosy-SigPath'] == '/algo/api/v2/service/pro/sse/agent_chat_generation'
     assert headers['Cosy-MachineId'] == load_machine_id(qoder_home)
     assert headers['Cosy-MachineToken'] == 'machine-token-demo'
     assert headers['Cosy-MachineType'] == 'machine-type-demo'
-    assert headers['Cosy-BodyLength'] == str(len('{"demo":true}'.encode('utf-8')))
+    assert headers['X-Model-Key'] == 'auto'
+    assert headers['X-Model-Source'] == 'system'
 
     _, payload_b64, signature = headers['Authorization'].split('.', 2)
     assert signature
+    assert headers['Cosy-Key'] == cached.key
+    assert headers['Cosy-BodyLength'] == str(len('{"demo":true}'.encode('utf-8')))
+    assert headers['Cosy-BodyHash'] == hashlib.md5(b'{"demo":true}').hexdigest()
+    assert headers['Cosy-SigPath'] == '/algo/api/v2/service/pro/sse/agent_chat_generation'
     payload = json.loads(base64.b64decode(payload_b64).decode('utf-8'))
     assert payload['cosyVersion'] == '0.14.2'
     assert payload['version'] == 'v1'
     assert payload['info'] == cached.encrypt_user_info
     assert 'cli_version' not in payload
+
+
+def test_build_chat_request_matches_qodercli_shape(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+    model_info = QoderModelInfo(id="ultimate", display_name="Ultimate", scene="chat", is_reasoning=True)
+
+    payload = client.build_chat_request(
+        prompt="reply_ok",
+        model_info=model_info,
+        user_type="personal_standard",
+        max_tokens=256,
+    )
+
+    assert payload["chatTask"] == "FREE_INPUT"
+    assert payload["sessionType"] == "qodercli"
+    assert payload["agent_id"] == "agent_common"
+    assert payload["taskId"] == "common"
+    assert payload["chatPrompt"] == ""
+    assert payload["messages"] == [{"role": "user", "content": "reply_ok"}]
+    assert payload["chatContext"]["text"] == {"type": "text", "text": "reply_ok"}
+    assert payload["chatContext"]["extra"]["originalContent"] == {"type": "text", "text": "reply_ok"}
+    assert payload["chatContext"]["extra"]["modelConfig"] == {"key": "ultimate", "is_reasoning": True}
+    assert payload["model_config"]["model"] == ""
+    assert payload["model_config"]["source"] == "system"
+    assert payload["parameters"] == {"max_tokens": 256}
+    assert payload["business"]["product"] == "cli"
+    assert payload["business"]["type"] == "agent"
+    assert payload["business"]["name"] == "reply_ok"
+    assert payload["business"]["stage"] == "start"
+
+
+
+def test_parse_chat_stream_line_unwraps_openai_sse_body(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / '.qoder'), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+    parser = QoderStreamJSONParser()
+    line = 'data:' + json.dumps(
+        {
+            "headers": {"Content-Type": ["application/json"]},
+            "body": json.dumps(
+                {
+                    "choices": [{"delta": {"content": "OK"}, "index": 0}],
+                    "object": "chat.completion.chunk",
+                },
+                ensure_ascii=False,
+            ),
+            "statusCodeValue": 200,
+            "statusCode": "OK",
+        },
+        ensure_ascii=False,
+    )
+
+    parsed, terminal = client._parse_chat_stream_line(line, parser)
+
+    assert parsed is not None
+    assert parsed.text_delta == 'OK'
+    assert terminal is False

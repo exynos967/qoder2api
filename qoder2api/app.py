@@ -31,7 +31,7 @@ from .catalog import QoderModelInfo, load_qoder_models
 from .concurrency import AdjustableConcurrencyLimiter
 from .login import QoderLoginError, QoderLoginManager
 from .prompting import PreparedPrompt, render_openai_messages
-from .qoder_api import QoderAPIError
+from .qoder_api import QoderAPIClient, QoderAPIError
 from .qoder_cli import QoderCLIError, QoderCLIInvoker
 from .runtime_settings import RuntimeSettingsManager
 from .schemas import (
@@ -137,7 +137,12 @@ def get_settings() -> Settings:
 
 @lru_cache
 def get_invoker() -> QoderCLIInvoker:
-    return QoderCLIInvoker(get_settings(), get_account_pool())
+    settings = get_settings()
+    return QoderCLIInvoker(
+        settings,
+        get_account_pool(),
+        api_client=QoderAPIClient(settings),
+    )
 
 
 @lru_cache

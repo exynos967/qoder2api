@@ -5,6 +5,7 @@ import json
 from qoder2api.crypto import (
     build_auth_payload,
     build_auth_signature,
+    encode_request_body,
     generate_auth_fields,
 )
 
@@ -46,3 +47,12 @@ def test_generate_auth_fields_returns_cipher_and_rsa_key() -> None:
     assert encrypt_user_info
     assert key
     assert encrypt_user_info != key
+
+
+
+def test_encode_request_body_uses_custom_base64_rotation() -> None:
+    encoded = encode_request_body('{"hello":"world"}')
+
+    assert encoded
+    assert encoded != base64.b64encode(b'{"hello":"world"}').decode("utf-8")
+    assert "$" in encoded or any(ch in encoded for ch in "_,@#&*%)%^.(!")

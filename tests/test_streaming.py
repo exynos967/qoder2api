@@ -75,3 +75,36 @@ def test_stream_json_parser_result_error() -> None:
 
     assert parsed.error_message == "request failed"
     assert parsed.error_type == "api_error"
+
+
+
+def test_stream_json_parser_openai_chunk_delta() -> None:
+    parser = QoderStreamJSONParser()
+
+    first = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "delta": {"content": "你"},
+                    "index": 0,
+                }
+            ],
+            "object": "chat.completion.chunk",
+        }
+    )
+    second = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "delta": {"content": "好"},
+                    "index": 0,
+                    "finish_reason": "stop",
+                }
+            ],
+            "object": "chat.completion.chunk",
+        }
+    )
+
+    assert first.text_delta == "你"
+    assert second.text_delta == "好"
+    assert second.finish_reason == "stop"

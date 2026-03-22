@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -27,7 +28,13 @@ from .auth_state import (
     save_cached_user_info,
 )
 from .catalog import QoderModelInfo
-from .crypto import build_bearer_token, build_pkce_challenge, generate_pkce_verifier
+from .crypto import (
+    build_bearer_token,
+    build_pkce_challenge,
+    encode_request_body,
+    generate_auth_fields,
+    generate_pkce_verifier,
+)
 from .settings import Settings
 from .streaming import ParsedStreamEvent, QoderStreamJSONParser
 from .runtime_settings import load_runtime_settings
@@ -37,18 +44,29 @@ _CHAT_PATH = (
     "/algo/api/v2/service/pro/sse/agent_chat_generation"
     "?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 )
+_CHAT_SIG_PATH = "/api/v2/service/pro/sse/agent_chat_generation"
 _LOGIN_POLL_PATH = "/api/v1/deviceToken/poll"
 _LOGIN_REFRESH_PATH = "/api/v1/deviceToken/refresh"
 _USERINFO_PATH = "/api/v1/userinfo"
 _LOGIN_TIMEOUT_SECONDS = 300
 _REFRESH_SKEW_MS = 30_000
-_OFFICIAL_COSY_VERSION = "0.14.2"
-_OFFICIAL_CLIENT_IP = "10.20.2.2"
-_OFFICIAL_MACHINE_OS = "x86_64_linux"
+_OFFICIAL_HEADER_VERSION = "0.1.32"
+_OFFICIAL_AUTH_COSY_VERSION = "0.14.2"
+_OFFICIAL_CLIENT_IP = "10.255.255.254"
 _OFFICIAL_CLIENT_TYPE = "2"
 _OFFICIAL_LOGIN_VERSION = "v2"
 _OFFICIAL_DATA_POLICY = "DISAGREE"
 _OFFICIAL_CHAT_USER_AGENT = "Go-http-client/2.0"
+_OFFICIAL_ACCEPT_ENCODING = "gzip"
+_DEFAULT_SESSION_TYPE = "qodercli"
+_DEFAULT_CHAT_TASK = "FREE_INPUT"
+_DEFAULT_CHAT_VERSION = "3"
+_DEFAULT_AGENT_ID = "agent_common"
+_DEFAULT_TASK_ID = "common"
+_DEFAULT_MODEL_SOURCE = "system"
+_DEFAULT_BUSINESS_PRODUCT = "cli"
+_DEFAULT_BUSINESS_TYPE = "agent"
+_DEFAULT_BUSINESS_STAGE = "start"
 _DEVICE_METADATA_NAME = "xieyi_device.json"
 
 
@@ -407,42 +425,211 @@ class QoderAPIClient:
             user_type=cached.user_type,
             max_tokens=max_tokens,
         )
-        body_text = json.dumps(request_body, ensure_ascii=False, separators=(",", ":"))
+        raw_body_text = json.dumps(request_body, ensure_ascii=False, separators=(",", ":"))
+        encoded_body_text = encode_request_body(raw_body_text)
         headers = self.build_chat_headers(
             qoder_home=qoder_home,
             cached_user=cached,
-            body_text=body_text,
-            path=_CHAT_PATH,
+            body_text=encoded_body_text,
+            path=_CHAT_SIG_PATH,
+            model_info=model_info,
         )
         url = f"{self.settings.infer_endpoint.rstrip('/')}{_CHAT_PATH}"
         parser = QoderStreamJSONParser()
 
-        async with self._client_factory() as client:
-            async with client.stream(
-                "POST",
-                url,
-                headers=headers,
-                content=body_text.encode("utf-8"),
-            ) as response:
-                if response.status_code != 200:
-                    text = (await response.aread()).decode("utf-8", errors="replace")
-                    raise self._map_http_error(response, text, default_message="Qoder 推理请求失败")
+        async for parsed_event in self._stream_chat_via_curl(
+            url=url,
+            headers=headers,
+            body_text=encoded_body_text,
+            parser=parser,
+        ):
+            if parsed_event.error_message:
+                raise QoderAPIError(parsed_event.error_message)
+            yield parsed_event
 
-                async for raw_line in response.aiter_lines():
-                    line = (raw_line or "").strip()
-                    if not line or line.startswith("event:") or line.startswith(":"):
-                        continue
-                    if line.startswith("data:"):
-                        line = line[5:].strip()
-                    if not line or line == "[DONE]":
-                        continue
+    def _build_chat_curl_command(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        body_text: str,
+    ) -> list[str]:
+        command = [
+            shutil.which("curl") or "curl",
+            "--http2",
+            "--silent",
+            "--show-error",
+            "--no-buffer",
+            "--location",
+            "--max-time",
+            str(int(max(self.settings.request_timeout_seconds, 1.0))),
+            "--write-out",
+            "\n__STATUS__:%{http_code}",
+            "-X",
+            "POST",
+        ]
+        for key, value in headers.items():
+            command.extend(["-H", f"{key}: {value}"])
+        command.extend(["--data-raw", body_text, url])
+        return command
 
-                    parsed_event = parser.feed_line(line)
-                    if parsed_event is None:
-                        continue
+    def _parse_chat_stream_line(
+        self,
+        line: str,
+        parser: QoderStreamJSONParser,
+    ) -> tuple[ParsedStreamEvent | None, bool]:
+        stripped = (line or "").strip()
+        if not stripped or stripped.startswith(":"):
+            return None, False
+        if stripped.startswith("event:"):
+            return None, False
+        if stripped.startswith("data:"):
+            stripped = stripped[5:].strip()
+        if not stripped:
+            return None, False
+        if stripped == "[DONE]":
+            return ParsedStreamEvent(raw={"body": "[DONE]"}, finish_reason="stop"), True
+
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return parser.feed_line(stripped), False
+
+        body = payload.get("body") if isinstance(payload, dict) else None
+        if isinstance(body, str):
+            status_code = int(payload.get("statusCodeValue") or 0) if isinstance(payload, dict) else 0
+            if status_code >= 400:
+                message = self._extract_error_message(body) or f"Qoder SSE 返回 {status_code}"
+                return ParsedStreamEvent(raw=payload, error_message=message), True
+            if body == "[DONE]":
+                return ParsedStreamEvent(raw=payload, finish_reason="stop"), True
+            parsed = parser.feed_line(body)
+            if parsed is not None:
+                parsed.raw = {"wrapper": payload, "body": parsed.raw}
+            return parsed, False
+
+        if isinstance(payload, dict):
+            status_code = int(payload.get("statusCodeValue") or 0)
+            if status_code >= 400:
+                message = self._extract_error_message(json.dumps(payload, ensure_ascii=False))
+                return ParsedStreamEvent(raw=payload, error_message=message), True
+            return parser.feed_event(payload), False
+
+        return parser.feed_line(stripped), False
+
+    async def _stream_chat_via_curl(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        body_text: str,
+        parser: QoderStreamJSONParser,
+    ) -> AsyncIterator[ParsedStreamEvent]:
+        command = self._build_chat_curl_command(url=url, headers=headers, body_text=body_text)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            raise QoderAPIError(
+                "当前环境缺少 curl，无法发起纯协议聊天请求",
+                status_code=500,
+                error_type="configuration_error",
+            ) from exc
+
+        status_code = 0
+        finished = False
+        stream_error_message = ""
+        stderr_task = None
+        if process.stderr is not None:
+            stderr_task = asyncio.create_task(process.stderr.read())
+
+        if process.stdout is not None:
+            async for raw_line in process.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if line.startswith("__STATUS__:"):
+                    try:
+                        status_code = int(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        status_code = 0
+                    continue
+
+                parsed_event, terminal = self._parse_chat_stream_line(line, parser)
+                if parsed_event is not None:
                     if parsed_event.error_message:
-                        raise QoderAPIError(parsed_event.error_message)
+                        stream_error_message = parsed_event.error_message
+                        finished = True
+                        break
                     yield parsed_event
+                if terminal:
+                    finished = True
+
+        if stream_error_message and process.returncode is None:
+            process.terminate()
+        stderr_output = b""
+        if stderr_task is not None:
+            stderr_output = await stderr_task
+        return_code = await process.wait()
+        stderr_text = stderr_output.decode("utf-8", errors="replace").strip()
+
+        if stream_error_message:
+            raise QoderAPIError(stream_error_message)
+        if status_code and status_code != 200 and not finished:
+            raise QoderAPIError(
+                stderr_text or f"Qoder 推理请求失败（HTTP {status_code}）",
+                status_code=502 if status_code >= 500 else status_code,
+                error_type="api_error",
+            )
+        if return_code == 28 and not finished:
+            raise QoderAPIError(
+                stderr_text or "Qoder 推理请求超时",
+                status_code=504,
+                error_type="timeout_error",
+            )
+        if return_code not in {0, 28} and not finished:
+            raise QoderAPIError(
+                stderr_text or f"curl 调用失败，退出码 {return_code}",
+                status_code=502,
+                error_type="api_error",
+            )
+
+    def _build_text_content(self, text: str) -> dict[str, str]:
+        return {"type": "text", "text": text}
+
+    def _build_chat_context(
+        self,
+        *,
+        prompt: str,
+        model_info: QoderModelInfo,
+    ) -> dict[str, Any]:
+        return {
+            "imageUrls": [],
+            "text": self._build_text_content(prompt),
+            "features": [],
+            "extra": {
+                "originalContent": self._build_text_content(prompt),
+                "modelConfig": {
+                    "key": model_info.id,
+                    "is_reasoning": model_info.is_reasoning,
+                },
+            },
+            "chatPrompt": "",
+        }
+
+    def _build_business_info(self, prompt: str) -> dict[str, Any]:
+        now_ms = int(time.time() * 1000)
+        return {
+            "product": _DEFAULT_BUSINESS_PRODUCT,
+            "version": self.settings.client_version,
+            "type": _DEFAULT_BUSINESS_TYPE,
+            "id": str(uuid.uuid4()),
+            "name": prompt,
+            "beginAt": now_ms,
+            "endAt": 0,
+            "stage": _DEFAULT_BUSINESS_STAGE,
+        }
 
     def build_chat_request(
         self,
@@ -452,34 +639,56 @@ class QoderAPIClient:
         user_type: str,
         max_tokens: int | None,
     ) -> dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        request_set_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
         model_config = {
             "key": model_info.id,
             "display_name": model_info.display_name,
-            "model": model_info.id,
+            "model": "",
             "format": "openai",
-            "is_vl": False,
+            "is_vl": True,
             "is_reasoning": model_info.is_reasoning,
-            "source": "system",
+            "api_key": "",
+            "url": "",
+            "source": _DEFAULT_MODEL_SOURCE,
             "max_input_tokens": model_info.max_input_tokens,
         }
         request_body: dict[str, Any] = {
+            "requestId": request_id,
+            "requestSetId": request_set_id,
+            "chatRecordId": request_id,
             "stream": True,
-            "source": 1,
-            "taskId": "common",
-            "version": "3",
+            "chatTask": _DEFAULT_CHAT_TASK,
+            "chatContext": self._build_chat_context(prompt=prompt, model_info=model_info),
+            "imageUrls": [],
             "isReply": True,
-            "requestId": str(uuid.uuid4()),
-            "chatTask": "FREE_INPUT",
-            "chatPrompt": prompt,
-            "sessionType": "chat",
-            "chatContext": {},
-            "agent_id": "agent_common",
-            "messages": [{"role": "user", "content": prompt}],
+            "isRetry": False,
+            "sessionId": session_id,
+            "codeLanguage": "",
+            "source": 1,
+            "version": _DEFAULT_CHAT_VERSION,
+            "chatPrompt": "",
+            "customSystemRoleContent": "",
+            "systemRoleContent": "",
+            "parameters": {},
             "userType": user_type or "personal_standard",
+            "taskDefinitionType": "",
+            "sessionType": _DEFAULT_SESSION_TYPE,
+            "agent_id": _DEFAULT_AGENT_ID,
+            "taskId": _DEFAULT_TASK_ID,
             "model_config": model_config,
+            "customModel": None,
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": [],
+            "mode": "",
+            "passkey": "",
+            "lineUpType": "",
+            "lineUpId": "",
+            "business": self._build_business_info(prompt),
         }
         if max_tokens:
-            request_body["parameters"] = {"max_tokens": max_tokens}
+            request_body["parameters"] = {"max_tokens": int(max_tokens)}
         return request_body
 
     def build_chat_headers(
@@ -489,10 +698,9 @@ class QoderAPIClient:
         cached_user: CachedUserInfo,
         body_text: str,
         path: str,
+        model_info: QoderModelInfo,
     ) -> dict[str, str]:
         date = str(int(time.time()))
-        body_bytes = body_text.encode("utf-8")
-        body_hash = hashlib.md5(body_bytes).hexdigest()
         metadata = self._load_device_metadata(qoder_home)
         machine_id = load_machine_id(qoder_home) or cached_user.login_device_id
         organization_tags = ",".join(
@@ -500,38 +708,50 @@ class QoderAPIClient:
             for tag in (cached_user.organization_tags or [])
             if str(tag).strip()
         )
+        encrypt_user_info = cached_user.encrypt_user_info.strip()
+        encrypted_key = cached_user.key.strip()
+        if not encrypt_user_info or not encrypted_key:
+            encrypt_user_info, encrypted_key = generate_auth_fields(cached_user)
         _, bearer_token = build_bearer_token(
-            encrypt_user_info=cached_user.encrypt_user_info,
-            key=cached_user.key,
+            encrypt_user_info=encrypt_user_info,
+            key=encrypted_key,
             date=date,
             body=body_text,
             path=path,
+            cosy_version=_OFFICIAL_AUTH_COSY_VERSION,
             client_version=self.settings.client_version,
         )
-        return {
+        body_bytes = body_text.encode("utf-8")
+        body_hash = hashlib.md5(body_bytes).hexdigest()
+        headers = {
             "Accept": "text/event-stream",
-            "Accept-Encoding": "identity",
+            "Accept-Encoding": _OFFICIAL_ACCEPT_ENCODING,
             "Authorization": bearer_token,
             "Content-Type": "application/json",
-            "Cosy-Version": _OFFICIAL_COSY_VERSION,
-            "Cosy-Key": cached_user.key,
-            "Cosy-Organization-Id": cached_user.organization_id,
-            "Cosy-Organization-Tags": organization_tags,
-            "Cosy-BodyLength": str(len(body_bytes)),
-            "Cosy-BodyHash": body_hash,
-            "Cosy-Data-Policy": _OFFICIAL_DATA_POLICY,
+            "Cosy-Version": self.settings.client_version or _OFFICIAL_HEADER_VERSION,
+            "Cosy-Key": encrypted_key,
             "Cosy-Date": date,
             "Cosy-User": cached_user.uid,
             "Cosy-MachineId": machine_id,
-            "Cosy-MachineOS": _OFFICIAL_MACHINE_OS,
             "Cosy-MachineToken": metadata.get("machine_token", ""),
             "Cosy-MachineType": metadata.get("machine_type", ""),
-            "Cosy-ClientIp": _OFFICIAL_CLIENT_IP,
+            "Cosy-ClientIp": metadata.get("client_ip", "") or _OFFICIAL_CLIENT_IP,
             "Cosy-ClientType": _OFFICIAL_CLIENT_TYPE,
-            "Login-Version": _OFFICIAL_LOGIN_VERSION,
+            "Cosy-BodyLength": str(len(body_bytes)),
+            "Cosy-BodyHash": body_hash,
             "Cosy-SigPath": path.split("?", 1)[0],
+            "Login-Version": _OFFICIAL_LOGIN_VERSION,
+            "X-Model-Key": model_info.id,
+            "X-Model-Source": _DEFAULT_MODEL_SOURCE,
             "User-Agent": _OFFICIAL_CHAT_USER_AGENT,
         }
+        if cached_user.organization_id:
+            headers["Cosy-Organization-Id"] = cached_user.organization_id
+        if organization_tags:
+            headers["Cosy-Organization-Tags"] = organization_tags
+        if cached_user.data_policy_agreed is not None:
+            headers["Cosy-Data-Policy"] = _OFFICIAL_DATA_POLICY
+        return headers
 
     def _base_headers(self, *, accept: str) -> dict[str, str]:
         return {
