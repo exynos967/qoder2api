@@ -27,6 +27,12 @@ from .accounts import (
     update_account_label,
 )
 from .account_status import load_account_status, refresh_account_status
+from .anthropic_messages import (
+    AnthropicMessagesRequest,
+    AnthropicStreamTranslator,
+    build_anthropic_message_response,
+    convert_anthropic_request_to_chat_request,
+)
 from .auth_state import inspect_local_auth
 from .catalog import QoderModelInfo, load_qoder_models
 from .concurrency import AdjustableConcurrencyLimiter
@@ -62,6 +68,25 @@ def _openai_error(message: str, *, error_type: str, status_code: int) -> JSONRes
         status_code=status_code,
         content={"error": {"message": message, "type": error_type}},
     )
+
+
+def _anthropic_error(message: str, *, error_type: str, status_code: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"type": "error", "error": {"type": error_type, "message": message}},
+    )
+
+
+def _error_response_for_request(
+    request: Request | None,
+    *,
+    message: str,
+    error_type: str,
+    status_code: int,
+) -> JSONResponse:
+    if request is not None and request.url.path == "/v1/messages":
+        return _anthropic_error(message, error_type=error_type, status_code=status_code)
+    return _openai_error(message, error_type=error_type, status_code=status_code)
 
 
 def _sse_payload(payload: dict[str, Any]) -> str:
@@ -194,23 +219,43 @@ if _webui_static_dir.exists():
 
 
 @app.exception_handler(QoderCLIError)
-async def handle_qoder_error(_: Request, exc: QoderCLIError) -> JSONResponse:
-    return _openai_error(str(exc), error_type=exc.error_type, status_code=exc.status_code)
+async def handle_qoder_error(request: Request, exc: QoderCLIError) -> JSONResponse:
+    return _error_response_for_request(
+        request,
+        message=str(exc),
+        error_type=exc.error_type,
+        status_code=exc.status_code,
+    )
 
 
 @app.exception_handler(QoderLoginError)
-async def handle_qoder_login_error(_: Request, exc: QoderLoginError) -> JSONResponse:
-    return _openai_error(str(exc), error_type=exc.error_type, status_code=exc.status_code)
+async def handle_qoder_login_error(request: Request, exc: QoderLoginError) -> JSONResponse:
+    return _error_response_for_request(
+        request,
+        message=str(exc),
+        error_type=exc.error_type,
+        status_code=exc.status_code,
+    )
 
 
 @app.exception_handler(QoderAPIError)
-async def handle_qoder_api_error(_: Request, exc: QoderAPIError) -> JSONResponse:
-    return _openai_error(str(exc), error_type=exc.error_type, status_code=exc.status_code)
+async def handle_qoder_api_error(request: Request, exc: QoderAPIError) -> JSONResponse:
+    return _error_response_for_request(
+        request,
+        message=str(exc),
+        error_type=exc.error_type,
+        status_code=exc.status_code,
+    )
 
 
 @app.exception_handler(ValueError)
-async def handle_value_error(_: Request, exc: ValueError) -> JSONResponse:
-    return _openai_error(str(exc), error_type="invalid_request_error", status_code=400)
+async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
+    return _error_response_for_request(
+        request,
+        message=str(exc),
+        error_type="invalid_request_error",
+        status_code=400,
+    )
 
 
 @app.get("/health")
@@ -764,37 +809,74 @@ async def _collect_stream_result(iterator) -> tuple[str, list[dict[str, Any]], s
     return "".join(output_parts).strip(), tool_calls, finish_reason
 
 
+def _completion_basis(output_text: str, tool_calls: list[dict[str, Any]] | None = None) -> str:
+    normalized_text = output_text.strip()
+    if normalized_text:
+        return normalized_text
+    if tool_calls:
+        return json.dumps(tool_calls, ensure_ascii=False)
+    return ""
+
+
+async def _run_non_stream_completion(
+    request: ChatCompletionRequest,
+    *,
+    prompt: PreparedPrompt,
+) -> tuple[str, str, list[dict[str, Any]], str]:
+    invoker = get_invoker()
+    async with get_invocation_limiter().slot():
+        if request.tools:
+            iterator, resolved_model = await invoker.stream_events(
+                prompt=prompt.prompt,
+                attachments=prompt.attachments,
+                messages=prompt.messages,
+                model=request.model,
+                max_tokens=request.max_tokens,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+            )
+            output_text, tool_calls, finish_reason = await _collect_stream_result(iterator)
+            return output_text, resolved_model, tool_calls, finish_reason
+
+        output_text, resolved_model = await invoker.run_text(
+            prompt=prompt.prompt,
+            attachments=prompt.attachments,
+            messages=prompt.messages,
+            model=request.model,
+            max_tokens=request.max_tokens,
+        )
+        return output_text, resolved_model, [], "stop"
+
+
+async def _start_streaming_completion(
+    request: ChatCompletionRequest,
+    *,
+    prompt: PreparedPrompt,
+):
+    invoker = get_invoker()
+    async with get_invocation_limiter().slot():
+        return await invoker.stream_events(
+            prompt=prompt.prompt,
+            attachments=prompt.attachments,
+            messages=prompt.messages,
+            model=request.model,
+            max_tokens=request.max_tokens,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+        )
+
+
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(request: ChatCompletionRequest):
     prompt = render_openai_messages(request.messages, request.response_format)
-    invoker = get_invoker()
-
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
 
     if not request.stream:
-        async with get_invocation_limiter().slot():
-            if request.tools:
-                iterator, resolved_model = await invoker.stream_events(
-                    prompt=prompt.prompt,
-                    attachments=prompt.attachments,
-                    messages=prompt.messages,
-                    model=request.model,
-                    max_tokens=request.max_tokens,
-                    tools=request.tools,
-                    tool_choice=request.tool_choice,
-                )
-                output_text, tool_calls, finish_reason = await _collect_stream_result(iterator)
-            else:
-                output_text, resolved_model = await invoker.run_text(
-                    prompt=prompt.prompt,
-                    attachments=prompt.attachments,
-                    messages=prompt.messages,
-                    model=request.model,
-                    max_tokens=request.max_tokens,
-                )
-                tool_calls = []
-                finish_reason = "stop"
+        output_text, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
+            request,
+            prompt=prompt,
+        )
         return JSONResponse(
             content=_build_completion_response(
                 completion_id=completion_id,
@@ -810,93 +892,87 @@ async def chat_completions(request: ChatCompletionRequest):
     async def event_stream():
         resolved_model = request.model
         try:
-            async with get_invocation_limiter().slot():
-                iterator, resolved_model = await invoker.stream_events(
-                    prompt=prompt.prompt,
-                    attachments=prompt.attachments,
-                    messages=prompt.messages,
-                    model=request.model,
-                    max_tokens=request.max_tokens,
-                    tools=request.tools,
-                    tool_choice=request.tool_choice,
-                )
+            iterator, resolved_model = await _start_streaming_completion(
+                request,
+                prompt=prompt,
+            )
 
-                finish_reason = "stop"
+            finish_reason = "stop"
 
-                yield _sse_payload(
-                    {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": resolved_model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"role": "assistant"},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                )
+            yield _sse_payload(
+                {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": resolved_model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
 
-                async for stream_event in iterator:
-                    if stream_event.finish_reason:
-                        finish_reason = stream_event.finish_reason
+            async for stream_event in iterator:
+                if stream_event.finish_reason:
+                    finish_reason = stream_event.finish_reason
 
-                    if stream_event.tool_call_deltas:
-                        yield _sse_payload(
-                            {
-                                "id": completion_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": resolved_model,
-                                "choices": [
-                                    {
-                                        "index": 0,
-                                        "delta": {"tool_calls": stream_event.tool_call_deltas},
-                                        "finish_reason": None,
-                                    }
-                                ],
-                            }
-                        )
+                if stream_event.tool_call_deltas:
+                    yield _sse_payload(
+                        {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": resolved_model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"tool_calls": stream_event.tool_call_deltas},
+                                    "finish_reason": None,
+                                }
+                            ],
+                        }
+                    )
 
-                    if not stream_event.text_delta:
-                        continue
-                    for index in range(0, len(stream_event.text_delta), get_settings().stream_chunk_chars):
-                        piece = stream_event.text_delta[
-                            index : index + get_settings().stream_chunk_chars
-                        ]
-                        yield _sse_payload(
-                            {
-                                "id": completion_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": resolved_model,
-                                "choices": [
-                                    {
-                                        "index": 0,
-                                        "delta": {"content": piece},
-                                        "finish_reason": None,
-                                    }
-                                ],
-                            }
-                        )
+                if not stream_event.text_delta:
+                    continue
+                for index in range(0, len(stream_event.text_delta), get_settings().stream_chunk_chars):
+                    piece = stream_event.text_delta[
+                        index : index + get_settings().stream_chunk_chars
+                    ]
+                    yield _sse_payload(
+                        {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": resolved_model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"content": piece},
+                                    "finish_reason": None,
+                                }
+                            ],
+                        }
+                    )
 
-                yield _sse_payload(
-                    {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": resolved_model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {},
-                                "finish_reason": finish_reason,
-                            }
-                        ],
-                    }
-                )
+            yield _sse_payload(
+                {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": resolved_model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                }
+            )
         except QoderCLIError as exc:
             yield _sse_payload(
                 {
@@ -910,6 +986,54 @@ async def chat_completions(request: ChatCompletionRequest):
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/v1/messages", response_model=None)
+async def anthropic_messages(request: AnthropicMessagesRequest):
+    chat_request = convert_anthropic_request_to_chat_request(request)
+    prompt = render_openai_messages(chat_request.messages)
+    message_id = f"msg_{uuid.uuid4().hex}"
+    input_tokens = _estimate_tokens(prompt.prompt)
+
+    if not request.stream:
+        output_text, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
+            chat_request,
+            prompt=prompt,
+        )
+        output_tokens = _estimate_tokens(_completion_basis(output_text, tool_calls))
+        return JSONResponse(
+            content=build_anthropic_message_response(
+                message_id=message_id,
+                model=resolved_model,
+                output_text=output_text,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        )
+
+    async def event_stream():
+        translator = AnthropicStreamTranslator(message_id=message_id, prompt_text=prompt.prompt)
+        try:
+            iterator, resolved_model = await _start_streaming_completion(
+                chat_request,
+                prompt=prompt,
+            )
+            for payload in translator.start(model=resolved_model):
+                yield payload
+            async for stream_event in iterator:
+                for payload in translator.feed(stream_event):
+                    yield payload
+            for payload in translator.finish():
+                yield payload
+        except (QoderCLIError, QoderAPIError, ValueError) as exc:
+            error_type = getattr(exc, "error_type", "api_error")
+            for payload in translator.error(message=str(exc), error_type=error_type):
+                yield payload
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
 
 def main() -> None:
     """CLI 入口。"""
