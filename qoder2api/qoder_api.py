@@ -457,7 +457,6 @@ class QoderAPIClient:
         *,
         url: str,
         headers: dict[str, str],
-        body_text: str,
     ) -> list[str]:
         command = [
             shutil.which("curl") or "curl",
@@ -475,7 +474,7 @@ class QoderAPIClient:
         ]
         for key, value in headers.items():
             command.extend(["-H", f"{key}: {value}"])
-        command.extend(["--data-raw", body_text, url])
+        command.extend(["--data-binary", "@-", url])
         return command
 
     def _parse_chat_stream_line(
@@ -530,10 +529,11 @@ class QoderAPIClient:
         body_text: str,
         parser: QoderStreamJSONParser,
     ) -> AsyncIterator[ParsedStreamEvent]:
-        command = self._build_chat_curl_command(url=url, headers=headers, body_text=body_text)
+        command = self._build_chat_curl_command(url=url, headers=headers)
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -543,6 +543,18 @@ class QoderAPIClient:
                 status_code=500,
                 error_type="configuration_error",
             ) from exc
+        except OSError as exc:
+            raise QoderAPIError(
+                f"启动 curl 失败: {exc}",
+                status_code=500,
+                error_type="api_error",
+            ) from exc
+
+        if process.stdin is not None:
+            process.stdin.write(body_text.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+            await process.stdin.wait_closed()
 
         status_code = 0
         finished = False

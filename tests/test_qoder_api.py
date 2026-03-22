@@ -264,6 +264,21 @@ def test_build_chat_request_with_image_attachment_matches_qodercli_shape(tmp_pat
 
 
 
+def test_build_chat_curl_command_reads_body_from_stdin(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+
+    command = client._build_chat_curl_command(
+        url="https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
+        headers={"Authorization": "Bearer demo"},
+    )
+
+    assert "--data-binary" in command
+    data_index = command.index("--data-binary")
+    assert command[data_index + 1] == "@-"
+    assert "--data-raw" not in command
+
+
 def test_parse_chat_stream_line_unwraps_openai_sse_body(tmp_path: Path) -> None:
     settings = Settings(qoder_home=str(tmp_path / '.qoder'), workspace=str(tmp_path))
     client = QoderAPIClient(settings)
