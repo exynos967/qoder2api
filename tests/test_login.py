@@ -173,6 +173,24 @@ def test_qoder_api_error_handler_returns_json() -> None:
     assert b"xieyi" in response.body
 
 
+def test_browser_login_snapshot_hides_auth_url_after_completion() -> None:
+    snapshot = BrowserLoginSnapshot(
+        session_id="done-session",
+        status="success",
+        message="登录成功",
+        auth_url="https://www.qoder.com/device/selectAccounts?challenge=done",
+        started_at=1.0,
+        updated_at=2.0,
+        done=True,
+        already_logged_in=True,
+        input_enabled=False,
+        terminal_output="登录成功",
+    )
+
+    assert snapshot.to_dict()["auth_url"] is not None
+    assert snapshot.to_public_dict()["auth_url"] is None
+
+
 class _FakeLoginManager:
     def __init__(self, snapshot: BrowserLoginSnapshot | None) -> None:
         self._snapshot = snapshot
@@ -321,6 +339,7 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     js_text = (Path(file_response.path).parent / "js" / "app.js").read_text(encoding="utf-8")
     assert file_response.status_code == 200
     assert "实时概览" in index_html
+    assert "Oauth链接" in index_html
     assert "Infer Endpoint" not in index_html
     assert "const OVERVIEW_API = '/webui/api/overview';" in js_text
 

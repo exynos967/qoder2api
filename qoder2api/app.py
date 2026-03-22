@@ -104,7 +104,7 @@ def _build_log_config(settings: Settings) -> dict[str, Any]:
                 "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             },
             "access": {
-                "format": '%(asctime)s [%(levelname)s] %(name)s: %(client_addr)s - "%(request_line)s" %(status_code)s',
+                "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             },
         },
         "handlers": {
@@ -308,7 +308,7 @@ def _build_auth_status_payload() -> dict[str, Any]:
     auth_state["logged_in_hint"] = auth_state.get("logged_in_hint", False) or pooled_logged_in_accounts > 0
     return {
         "auth": auth_state,
-        "session": session.to_dict() if session else None,
+        "session": session.to_public_dict() if session else None,
     }
 
 
@@ -534,7 +534,7 @@ async def start_browser_login(request: StartBrowserLoginRequest | None = None) -
     current = login_manager.current_session()
     if current is not None and not current.done:
         payload = _build_auth_status_payload()
-        payload["session"] = current.to_dict()
+        payload["session"] = current.to_public_dict()
         payload["accounts"] = _build_accounts_payload()
         return payload
 
@@ -559,7 +559,7 @@ async def start_browser_login(request: StartBrowserLoginRequest | None = None) -
         raise
 
     payload = _build_auth_status_payload()
-    payload["session"] = session.to_dict()
+    payload["session"] = session.to_public_dict()
     payload["accounts"] = _build_accounts_payload()
     return payload
 
@@ -567,7 +567,7 @@ async def start_browser_login(request: StartBrowserLoginRequest | None = None) -
 @app.get("/auth/browser/sessions/{session_id}")
 async def get_browser_login_session(session_id: str) -> dict[str, Any]:
     session = get_login_manager().get_session(session_id)
-    return session.snapshot().to_dict()
+    return session.snapshot().to_public_dict()
 
 
 @app.post("/auth/browser/sessions/{session_id}/input")
@@ -576,13 +576,13 @@ async def send_browser_login_input(
     request: LoginSessionInputRequest,
 ) -> dict[str, Any]:
     snapshot = get_login_manager().send_key(session_id, request.key)
-    return snapshot.to_dict()
+    return snapshot.to_public_dict()
 
 
 @app.post("/auth/browser/sessions/{session_id}/cancel")
 async def cancel_browser_login_session(session_id: str) -> dict[str, Any]:
     snapshot = get_login_manager().cancel(session_id)
-    return snapshot.to_dict()
+    return snapshot.to_public_dict()
 
 
 @app.get("/webui/api/accounts")

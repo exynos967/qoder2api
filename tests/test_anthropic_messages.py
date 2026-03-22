@@ -53,7 +53,7 @@ class _FakeAnthropicToolInvoker:
                 finish_reason="tool_calls",
             )
 
-        return _iterator(), "MiniMax-M2.5"
+        return _iterator(), "MiniMax-M2.7"
 
 
 class _FakeAnthropicTextInvoker:
@@ -119,7 +119,7 @@ def _extract_sse_pairs(lines: list[str]) -> list[tuple[str, dict[str, Any]]]:
 def test_convert_anthropic_request_to_chat_request_supports_tools_and_images() -> None:
     request = AnthropicMessagesRequest.model_validate(
         {
-            "model": "MiniMax-M2.5",
+            "model": "MiniMax-M2.7",
             "max_tokens": 256,
             "system": "你是一个测试助手。",
             "messages": [
@@ -223,7 +223,7 @@ def test_anthropic_messages_non_stream_returns_tool_use(monkeypatch) -> None:
     response = client.post(
         "/v1/messages",
         json={
-            "model": "MiniMax-M2.5",
+            "model": "MiniMax-M2.7",
             "max_tokens": 128,
             "messages": [{"role": "user", "content": "请调用工具"}],
             "tools": [

@@ -144,6 +144,17 @@ function updatePageMeta(page) {
     setText('page-subtitle', meta.subtitle);
 }
 
+function syncAuthUrlInput() {
+    $('auth-url').value = state.authUrl || '';
+    $('open-auth-url-btn').disabled = !state.authUrl;
+    $('copy-auth-url-btn').disabled = !state.authUrl;
+}
+
+function clearAuthUrlInput() {
+    state.authUrl = '';
+    syncAuthUrlInput();
+}
+
 function switchPage(page) {
     state.activePage = page;
 
@@ -156,13 +167,16 @@ function switchPage(page) {
     });
 
     updatePageMeta(page);
+    if (page !== 'accounts' && state.sessionDone) {
+        clearAuthUrlInput();
+    }
 }
 
 function renderLoginState(session, auth = {}) {
     const previousAuthUrl = state.authUrl;
     state.sessionId = session?.session_id || null;
     state.sessionDone = !(session && !session.done);
-    state.authUrl = session?.auth_url || '';
+    state.authUrl = session && !session.done ? (session.auth_url || '') : '';
 
     if (
         state.popup &&
@@ -178,9 +192,7 @@ function renderLoginState(session, auth = {}) {
         }
     }
 
-    $('auth-url').value = state.authUrl;
-    $('open-auth-url-btn').disabled = !state.authUrl;
-    $('copy-auth-url-btn').disabled = !state.authUrl;
+    syncAuthUrlInput();
 
     if (session) {
         $('login-terminal-output').textContent = session.terminal_output || '等待网页登录状态更新...';
@@ -752,6 +764,7 @@ function startSessionPolling() {
 
 async function startBrowserLogin() {
     $('start-login-btn').disabled = true;
+    clearAuthUrlInput();
     try {
         const data = await apiRequest(AUTH_START_API, {
             method: 'POST',
@@ -1059,6 +1072,7 @@ function bindEvents() {
 async function init() {
     updatePageMeta(state.activePage);
     updateLogsAutoscrollUi();
+    clearAuthUrlInput();
     bindEvents();
     try {
         await Promise.all([loadOverview(), loadAccounts(), loadModels(), loadRuntimeSettings()]);

@@ -85,6 +85,12 @@ class BrowserLoginSnapshot:
             "terminal_output": self.terminal_output,
         }
 
+    def to_public_dict(self) -> dict[str, Any]:
+        payload = self.to_dict()
+        if self.done:
+            payload["auth_url"] = None
+        return payload
+
 
 class BrowserLoginSession:
     """单个浏览器登录会话。"""

@@ -26,8 +26,10 @@ class QoderModelInfo:
         return _normalize_public_id(self.id, self.display_name)
 
 
-_DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.5"}
-_PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax-M2.5"}
+_DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
+_PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
+
+_COMPATIBLE_MODEL_ALIASES = {"mmodel": ("MiniMax-M2.5", "MiniMax M2.5", "MiniMax-M2.7", "MiniMax M2.7")}
 
 
 def _normalize_public_id(model_id: str, display_name: str) -> str:
@@ -50,7 +52,7 @@ _FALLBACK_MODELS = [
     QoderModelInfo(id="q35model", display_name="Qwen3.5-Plus", scene="chat", is_vl=True, price_factor=0.2),
     QoderModelInfo(id="gmodel", display_name="GLM-5", scene="chat", is_vl=True, price_factor=0.5),
     QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", is_vl=True, price_factor=0.3),
-    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.5", scene="chat", is_vl=True, price_factor=0.2),
+    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.7", scene="chat", is_vl=True, price_factor=0.2),
 ]
 
 
@@ -127,6 +129,10 @@ def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
             _hyphen_alias(model.public_id),
         )
         for alias in raw_aliases:
+            _register_alias(aliases, alias, model.id)
+            _register_alias(aliases, f"qoder/{alias}", model.id)
+
+        for alias in _COMPATIBLE_MODEL_ALIASES.get(model.id, ()):
             _register_alias(aliases, alias, model.id)
             _register_alias(aliases, f"qoder/{alias}", model.id)
     return aliases
