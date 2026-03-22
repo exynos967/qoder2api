@@ -242,6 +242,15 @@ class _FakeAccountPool:
         return [self._account]
 
 
+class _FakeTestInvoker:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def run_text(self, **kwargs):
+        self.calls.append(kwargs)
+        return "ok", "Auto"
+
+
 def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> None:
     qoder_home = prepare_qoder_home(tmp_path)
     logs_dir = qoder_home / "logs"
@@ -342,6 +351,33 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     assert "Oauth链接" in index_html
     assert "Infer Endpoint" not in index_html
     assert "const OVERVIEW_API = '/webui/api/overview';" in js_text
+
+
+def test_webui_test_account_route_passes_messages_argument(monkeypatch, tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    account = QoderAccount(
+        id="acct-1",
+        label="测试账号",
+        enabled=True,
+        managed=True,
+        status="ready",
+        auth_type="qoder-browser",
+        qoder_home=str(qoder_home),
+        machine_id="1234567890abcdef-demo-machine",
+    )
+    invoker = _FakeTestInvoker()
+
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_module, "get_account", lambda *_args, **_kwargs: account)
+    monkeypatch.setattr(app_module, "get_invoker", lambda: invoker)
+
+    payload = asyncio.run(app_module.webui_test_account(account.id))
+
+    assert payload["success"] is True
+    assert invoker.calls
+    assert invoker.calls[0]["messages"] is None
+    assert invoker.calls[0]["preferred_account_id"] == account.id
 
 
 def test_webui_refresh_account_status_route(monkeypatch, tmp_path: Path) -> None:

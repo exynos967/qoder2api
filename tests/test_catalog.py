@@ -1,3 +1,4 @@
+import pytest
 import json
 
 from qoder2api.catalog import load_qoder_models, resolve_model_name
@@ -30,6 +31,6 @@ def test_load_qoder_models_normalizes_mmodel_display_name(tmp_path) -> None:
     assert models[0].display_name == 'MiniMax-M2.7'
     assert models[0].public_id == 'MiniMax-M2.7'
     assert resolve_model_name('MiniMax-M2.7', models, 'auto') == 'mmodel'
-    assert resolve_model_name('MiniMax-M2.5', models, 'auto') == 'mmodel'
-    assert resolve_model_name('MiniMax M2.7', models, 'auto') == 'mmodel'
-    assert resolve_model_name('MiniMax M2.5', models, 'auto') == 'mmodel'
+
+    with pytest.raises(ValueError):
+        resolve_model_name('MiniMax M2.7', models, 'auto')

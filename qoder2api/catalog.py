@@ -29,7 +29,6 @@ class QoderModelInfo:
 _DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
 _PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
 
-_COMPATIBLE_MODEL_ALIASES = {"mmodel": ("MiniMax-M2.5", "MiniMax M2.5", "MiniMax-M2.7", "MiniMax M2.7")}
 
 
 def _normalize_public_id(model_id: str, display_name: str) -> str:
@@ -119,20 +118,21 @@ def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
     """构建外部模型名到 Qoder 内部 key 的映射。"""
     aliases: dict[str, str] = {}
     for model in models:
-        raw_aliases = (
+        raw_aliases = [
             model.id,
             model.display_name,
             model.public_id,
-            _space_alias(model.display_name),
-            _space_alias(model.public_id),
             _hyphen_alias(model.display_name),
             _hyphen_alias(model.public_id),
-        )
+        ]
+        if model.id != "mmodel":
+            raw_aliases.extend(
+                (
+                    _space_alias(model.display_name),
+                    _space_alias(model.public_id),
+                )
+            )
         for alias in raw_aliases:
-            _register_alias(aliases, alias, model.id)
-            _register_alias(aliases, f"qoder/{alias}", model.id)
-
-        for alias in _COMPATIBLE_MODEL_ALIASES.get(model.id, ()):
             _register_alias(aliases, alias, model.id)
             _register_alias(aliases, f"qoder/{alias}", model.id)
     return aliases

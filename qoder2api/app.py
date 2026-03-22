@@ -643,6 +643,7 @@ async def webui_test_account(account_id: str) -> dict[str, Any]:
         output_text, resolved_model = await get_invoker().run_text(
             prompt="请只回复 ok",
             attachments=[],
+            messages=None,
             model="auto",
             max_tokens=32,
             preferred_account_id=account_id,
