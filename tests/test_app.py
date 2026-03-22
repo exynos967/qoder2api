@@ -53,6 +53,24 @@ async def _collect_streaming_body(response) -> list[str]:
     return [line for line in ''.join(chunks).splitlines() if line]
 
 
+
+
+class _FakeReasoningInvoker:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run_text(self, **kwargs):  # pragma: no cover - tools path should not use it
+        raise AssertionError("run_text should not be used in reasoning tests")
+
+    async def stream_events(self, **kwargs):
+        self.calls.append(kwargs)
+
+        async def _iterator():
+            yield ParsedStreamEvent(reasoning_delta="先分析一下")
+            yield ParsedStreamEvent(text_delta="最终答案", finish_reason="stop")
+
+        return _iterator(), "Ultimate"
+
 class _FakeInvoker:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -194,3 +212,74 @@ def test_chat_completions_stream_emits_tool_calls(monkeypatch) -> None:
     assert data_payloads[-1]["choices"][0]["finish_reason"] == "tool_calls"
     assert lines[-1] == "data: [DONE]"
     assert fake_invoker.calls[0]["messages"] == [{"role": "user", "content": "请调用工具"}]
+
+
+def test_chat_completions_non_stream_returns_reasoning_content(monkeypatch) -> None:
+    fake_invoker = _FakeReasoningInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+
+    request = app_module.ChatCompletionRequest.model_validate(
+        {
+            "model": "Ultimate",
+            "stream": False,
+            "messages": [{"role": "user", "content": "请先思考再回答"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "noop",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            "tool_choice": "none",
+        }
+    )
+    response = asyncio.run(app_module.chat_completions(request))
+
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert payload["choices"][0]["message"]["reasoning_content"] == "先分析一下"
+    assert payload["choices"][0]["message"]["content"] == "最终答案"
+
+
+def test_chat_completions_stream_emits_reasoning_content(monkeypatch) -> None:
+    fake_invoker = _FakeReasoningInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+
+    request = app_module.ChatCompletionRequest.model_validate(
+        {
+            "model": "Ultimate",
+            "stream": True,
+            "messages": [{"role": "user", "content": "请先思考再回答"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "noop",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            "tool_choice": "none",
+        }
+    )
+    response = asyncio.run(app_module.chat_completions(request))
+
+    assert response.status_code == 200
+    lines = asyncio.run(_collect_streaming_body(response))
+    data_payloads = [json.loads(line[6:]) for line in lines if line.startswith("data: {")]
+    reasoning_deltas = [
+        payload["choices"][0]["delta"].get("reasoning_content", "")
+        for payload in data_payloads
+        if payload["choices"][0]["delta"].get("reasoning_content")
+    ]
+    content_deltas = [
+        payload["choices"][0]["delta"].get("content", "")
+        for payload in data_payloads
+        if payload["choices"][0]["delta"].get("content")
+    ]
+    assert "".join(reasoning_deltas) == "先分析一下"
+    assert "".join(content_deltas) == "最终答案"

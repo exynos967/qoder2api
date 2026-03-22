@@ -39,6 +39,25 @@ async def _collect_streaming_body(response) -> list[str]:
     return [line for line in ''.join(chunks).splitlines() if line]
 
 
+
+
+class _FakeAnthropicReasoningInvoker:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run_text(self, **kwargs):  # pragma: no cover - reasoning tests use stream_events
+        raise AssertionError("run_text should not be used in anthropic reasoning tests")
+
+    async def stream_events(self, **kwargs):
+        self.calls.append(kwargs)
+
+        async def _iterator():
+            yield ParsedStreamEvent(reasoning_delta="先想一想")
+            yield ParsedStreamEvent(reasoning_signature_delta="sig_123")
+            yield ParsedStreamEvent(text_delta="答案", finish_reason="stop")
+
+        return _iterator(), "Ultimate"
+
 class _FakeAnthropicToolInvoker:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -438,3 +457,73 @@ def test_anthropic_messages_stream_applies_stop_sequences(monkeypatch) -> None:
     assert all("<END>" not in item for item in text_deltas)
     assert pairs[-2][1]["delta"]["stop_reason"] == "stop_sequence"
     assert pairs[-2][1]["delta"]["stop_sequence"] == "<END>"
+
+
+def test_anthropic_messages_non_stream_returns_thinking_block(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicReasoningInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
+            "model": "Ultimate",
+            "max_tokens": 128,
+            "stream": False,
+            "messages": [{"role": "user", "content": "请先思考再回答"}],
+            "tools": [
+                {
+                    "name": "noop",
+                    "description": "占位工具",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            "tool_choice": {"type": "none"},
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
+
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert payload["content"][0] == {
+        "type": "thinking",
+        "thinking": "先想一想",
+        "signature": "sig_123",
+    }
+    assert payload["content"][1] == {"type": "text", "text": "答案"}
+
+
+def test_anthropic_messages_stream_emits_thinking_events(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicReasoningInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
+            "model": "Ultimate",
+            "max_tokens": 128,
+            "stream": True,
+            "messages": [{"role": "user", "content": "请先思考再回答"}],
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
+
+    assert response.status_code == 200
+    lines = asyncio.run(_collect_streaming_body(response))
+    pairs = _extract_sse_pairs(lines)
+    assert [event for event, _ in pairs] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_stop",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    assert pairs[1][1]["content_block"] == {"type": "thinking", "thinking": ""}
+    assert pairs[2][1]["delta"] == {"type": "thinking_delta", "thinking": "先想一想"}
+    assert pairs[3][1]["delta"] == {"type": "signature_delta", "signature": "sig_123"}
+    assert pairs[5][1]["content_block"] == {"type": "text", "text": ""}
+    assert pairs[6][1]["delta"] == {"type": "text_delta", "text": "答案"}

@@ -244,3 +244,40 @@ def test_stream_json_parser_openai_chunk_text_fallback() -> None:
 
     assert parsed.text_delta == "GLM fallback"
     assert parsed.finish_reason == "stop"
+
+
+def test_stream_json_parser_stream_event_reasoning_delta_is_separate() -> None:
+    parser = QoderStreamJSONParser()
+
+    parsed = parser.feed_event(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": "先分析一下"},
+            },
+        }
+    )
+
+    assert parsed.reasoning_delta == "先分析一下"
+    assert parsed.text_delta == ""
+
+
+def test_stream_json_parser_openai_chunk_reasoning_content_fallback() -> None:
+    parser = QoderStreamJSONParser()
+
+    parsed = parser.feed_event(
+        {
+            "choices": [
+                {
+                    "delta": {"reasoning_content": "逐步推理"},
+                    "index": 0,
+                    "finish_reason": None,
+                }
+            ],
+            "object": "chat.completion.chunk",
+        }
+    )
+
+    assert parsed.reasoning_delta == "逐步推理"
+    assert parsed.text_delta == ""

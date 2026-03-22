@@ -764,20 +764,26 @@ def _build_completion_response(
     model: str,
     prompt: PreparedPrompt,
     output_text: str,
+    reasoning_content: str = "",
     tool_calls: list[dict[str, Any]] | None = None,
     finish_reason: str = "stop",
 ) -> dict[str, Any]:
     normalized_tool_calls = list(tool_calls or [])
+    normalized_reasoning = reasoning_content.strip()
     prompt_tokens = _estimate_tokens(prompt.prompt)
-    completion_basis = output_text
-    if not completion_basis and normalized_tool_calls:
-        completion_basis = json.dumps(normalized_tool_calls, ensure_ascii=False)
+    completion_basis = _completion_basis(
+        output_text,
+        tool_calls=normalized_tool_calls,
+        reasoning_content=normalized_reasoning,
+    )
     completion_tokens = _estimate_tokens(completion_basis)
 
     message: dict[str, Any] = {
         "role": "assistant",
         "content": output_text or None,
     }
+    if normalized_reasoning:
+        message["reasoning_content"] = normalized_reasoning
     if normalized_tool_calls:
         message["tool_calls"] = normalized_tool_calls
 
@@ -801,12 +807,18 @@ def _build_completion_response(
     }
 
 
-async def _collect_stream_result(iterator) -> tuple[str, list[dict[str, Any]], str]:
+async def _collect_stream_result(iterator) -> tuple[str, str, str, list[dict[str, Any]], str]:
     output_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    reasoning_signature = ""
     tool_calls: list[dict[str, Any]] = []
     finish_reason = "stop"
 
     async for stream_event in iterator:
+        if stream_event.reasoning_delta:
+            reasoning_parts.append(stream_event.reasoning_delta)
+        if stream_event.reasoning_signature_delta:
+            reasoning_signature += stream_event.reasoning_signature_delta
         if stream_event.text_delta:
             output_parts.append(stream_event.text_delta)
         if stream_event.tool_call_deltas:
@@ -814,11 +826,20 @@ async def _collect_stream_result(iterator) -> tuple[str, list[dict[str, Any]], s
         if stream_event.finish_reason:
             finish_reason = stream_event.finish_reason
 
-    return "".join(output_parts).strip(), tool_calls, finish_reason
+    return "".join(output_parts).strip(), "".join(reasoning_parts).strip(), reasoning_signature, tool_calls, finish_reason
 
 
-def _completion_basis(output_text: str, tool_calls: list[dict[str, Any]] | None = None) -> str:
+def _completion_basis(
+    output_text: str,
+    tool_calls: list[dict[str, Any]] | None = None,
+    reasoning_content: str = "",
+) -> str:
+    normalized_reasoning = reasoning_content.strip()
     normalized_text = output_text.strip()
+    if normalized_reasoning and normalized_text:
+        return f"{normalized_reasoning}\n{normalized_text}"
+    if normalized_reasoning:
+        return normalized_reasoning
     if normalized_text:
         return normalized_text
     if tool_calls:
@@ -830,7 +851,7 @@ async def _run_non_stream_completion(
     request: ChatCompletionRequest,
     *,
     prompt: PreparedPrompt,
-) -> tuple[str, str, list[dict[str, Any]], str]:
+) -> tuple[str, str, str, str, list[dict[str, Any]], str]:
     invoker = get_invoker()
     async with get_invocation_limiter().slot():
         if request.tools:
@@ -843,8 +864,8 @@ async def _run_non_stream_completion(
                 tools=request.tools,
                 tool_choice=request.tool_choice,
             )
-            output_text, tool_calls, finish_reason = await _collect_stream_result(iterator)
-            return output_text, resolved_model, tool_calls, finish_reason
+            output_text, reasoning_content, reasoning_signature, tool_calls, finish_reason = await _collect_stream_result(iterator)
+            return output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason
 
         output_text, resolved_model = await invoker.run_text(
             prompt=prompt.prompt,
@@ -853,7 +874,7 @@ async def _run_non_stream_completion(
             model=request.model,
             max_tokens=request.max_tokens,
         )
-        return output_text, resolved_model, [], "stop"
+        return output_text, "", "", resolved_model, [], "stop"
 
 
 async def _start_streaming_completion(
@@ -882,7 +903,7 @@ async def chat_completions(request: ChatCompletionRequest):
     stream_mode = _resolve_request_stream_mode(request.stream)
 
     if not stream_mode:
-        output_text, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
+        output_text, reasoning_content, _, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
             request,
             prompt=prompt,
         )
@@ -893,6 +914,7 @@ async def chat_completions(request: ChatCompletionRequest):
                 model=resolved_model,
                 prompt=prompt,
                 output_text=output_text,
+                reasoning_content=reasoning_content,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
             )
@@ -944,6 +966,27 @@ async def chat_completions(request: ChatCompletionRequest):
                             ],
                         }
                     )
+
+                if stream_event.reasoning_delta:
+                    for index in range(0, len(stream_event.reasoning_delta), get_settings().stream_chunk_chars):
+                        piece = stream_event.reasoning_delta[
+                            index : index + get_settings().stream_chunk_chars
+                        ]
+                        yield _sse_payload(
+                            {
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": resolved_model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"reasoning_content": piece},
+                                        "finish_reason": None,
+                                    }
+                                ],
+                            }
+                        )
 
                 if not stream_event.text_delta:
                     continue
@@ -1006,17 +1049,25 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
     stream_mode = _resolve_request_stream_mode(request.stream)
 
     if not stream_mode:
-        output_text, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
+        output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
             chat_request,
             prompt=prompt,
         )
         stop_result = _apply_stop_sequences(output_text, request.stop_sequences)
-        output_tokens = _estimate_tokens(_completion_basis(stop_result.text, tool_calls))
+        output_tokens = _estimate_tokens(
+            _completion_basis(
+                stop_result.text,
+                tool_calls,
+                reasoning_content=reasoning_content,
+            )
+        )
         return JSONResponse(
             content=build_anthropic_message_response(
                 message_id=message_id,
                 model=resolved_model,
                 output_text=stop_result.text,
+                reasoning_text=reasoning_content,
+                reasoning_signature=reasoning_signature,
                 tool_calls=tool_calls,
                 finish_reason=("stop_sequence" if stop_result.matched else finish_reason),
                 input_tokens=input_tokens,

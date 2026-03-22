@@ -19,7 +19,7 @@ def _as_text(value: Any) -> str:
 
 
 def _join_text_blocks(value: Any) -> str:
-    """从 message/content/delta 结构中提取纯文本。"""
+    """从 message/content/delta 结构中提取可见正文。"""
     if value is None:
         return ""
 
@@ -35,8 +35,8 @@ def _join_text_blocks(value: Any) -> str:
     block_type = _as_text(value.get("type")).strip()
     if block_type in {"text", "text_delta", "input_text", "output_text"}:
         return _as_text(value.get("text"))
-    if block_type == "thinking_delta":
-        return _as_text(value.get("thinking"))
+    if block_type in {"thinking", "thinking_delta", "redacted_thinking", "signature_delta"}:
+        return ""
 
     if isinstance(value.get("text"), str):
         return _as_text(value.get("text"))
@@ -44,6 +44,67 @@ def _join_text_blocks(value: Any) -> str:
     for key in ("content", "message", "delta", "result", "data"):
         if key in value:
             extracted = _join_text_blocks(value[key])
+            if extracted:
+                return extracted
+
+    return ""
+
+
+def _join_reasoning_blocks(value: Any) -> str:
+    """从 message/content/delta 结构中提取 thinking/reasoning 文本。"""
+    if value is None:
+        return ""
+
+    if isinstance(value, list):
+        return "".join(_join_reasoning_blocks(item) for item in value)
+
+    if not isinstance(value, dict):
+        return ""
+
+    block_type = _as_text(value.get("type")).strip()
+    if block_type in {"thinking", "thinking_delta"}:
+        return _as_text(value.get("thinking") or value.get("text"))
+    if block_type in {"redacted_thinking", "signature_delta"}:
+        return ""
+
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        direct_value = value.get(key)
+        if isinstance(direct_value, str):
+            return _as_text(direct_value)
+        extracted = _join_reasoning_blocks(direct_value)
+        if extracted:
+            return extracted
+
+    for key in ("content", "message", "delta", "result", "data"):
+        if key in value:
+            extracted = _join_reasoning_blocks(value[key])
+            if extracted:
+                return extracted
+
+    return ""
+
+
+def _extract_reasoning_signature(value: Any) -> str:
+    """提取 Anthropic thinking block 的 signature。"""
+    if value is None:
+        return ""
+
+    if isinstance(value, list):
+        return "".join(_extract_reasoning_signature(item) for item in value)
+
+    if not isinstance(value, dict):
+        return ""
+
+    block_type = _as_text(value.get("type")).strip()
+    if block_type in {"thinking", "signature_delta"}:
+        return _as_text(value.get("signature"))
+
+    if isinstance(value.get("signature"), str):
+        return _as_text(value.get("signature"))
+
+    for key in ("content", "message", "delta", "result", "data"):
+        if key in value:
+            extracted = _extract_reasoning_signature(value[key])
             if extracted:
                 return extracted
 
@@ -162,6 +223,39 @@ def _extract_openai_chunk_text(choice: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_openai_chunk_reasoning(choice: dict[str, Any]) -> str:
+    delta_payload = choice.get("delta")
+    reasoning = _join_reasoning_blocks(delta_payload)
+    if reasoning:
+        return reasoning
+
+    for key in ("reasoning_content", "reasoning", "thinking", "message", "content", "response"):
+        if key in choice:
+            reasoning = _join_reasoning_blocks(choice.get(key))
+            if reasoning:
+                return reasoning
+            direct_value = choice.get(key)
+            if isinstance(direct_value, str):
+                return direct_value
+
+    return ""
+
+
+def _extract_openai_chunk_reasoning_signature(choice: dict[str, Any]) -> str:
+    delta_payload = choice.get("delta")
+    signature = _extract_reasoning_signature(delta_payload)
+    if signature:
+        return signature
+
+    for key in ("message", "content", "response"):
+        if key in choice:
+            signature = _extract_reasoning_signature(choice.get(key))
+            if signature:
+                return signature
+
+    return ""
+
+
 def _merge_chunk_text(current: str, chunk: str) -> str:
     if not chunk:
         return current
@@ -250,6 +344,8 @@ class ParsedStreamEvent:
 
     raw: dict[str, Any] = field(default_factory=dict)
     text_delta: str = ""
+    reasoning_delta: str = ""
+    reasoning_signature_delta: str = ""
     tool_call_deltas: list[ToolCallDelta] = field(default_factory=list)
     finish_reason: str | None = None
     error_message: str = ""
@@ -262,6 +358,8 @@ class QoderStreamJSONParser:
     def __init__(self) -> None:
         self._current_message_id = "__default__"
         self._message_snapshots: dict[str, str] = {}
+        self._reasoning_snapshots: dict[str, str] = {}
+        self._reasoning_signatures: dict[str, str] = {}
 
     def _append_delta(self, message_id: str, delta_text: str) -> str:
         if not delta_text:
@@ -269,6 +367,20 @@ class QoderStreamJSONParser:
         previous = self._message_snapshots.get(message_id, "")
         self._message_snapshots[message_id] = previous + delta_text
         return delta_text
+
+    def _append_reasoning_delta(self, message_id: str, delta_text: str) -> str:
+        if not delta_text:
+            return ""
+        previous = self._reasoning_snapshots.get(message_id, "")
+        self._reasoning_snapshots[message_id] = previous + delta_text
+        return delta_text
+
+    def _append_reasoning_signature(self, message_id: str, signature_text: str) -> str:
+        if not signature_text:
+            return ""
+        previous = self._reasoning_signatures.get(message_id, "")
+        self._reasoning_signatures[message_id] = previous + signature_text
+        return signature_text
 
     def _diff_snapshot(self, message_id: str, snapshot_text: str) -> str:
         if not snapshot_text:
@@ -282,6 +394,32 @@ class QoderStreamJSONParser:
         if snapshot_text.startswith(previous):
             return snapshot_text[len(previous) :]
         return snapshot_text
+
+    def _diff_reasoning_snapshot(self, message_id: str, snapshot_text: str) -> str:
+        if not snapshot_text:
+            return ""
+
+        previous = self._reasoning_snapshots.get(message_id, "")
+        self._reasoning_snapshots[message_id] = snapshot_text
+
+        if snapshot_text == previous:
+            return ""
+        if snapshot_text.startswith(previous):
+            return snapshot_text[len(previous) :]
+        return snapshot_text
+
+    def _diff_reasoning_signature(self, message_id: str, signature_text: str) -> str:
+        if not signature_text:
+            return ""
+
+        previous = self._reasoning_signatures.get(message_id, "")
+        self._reasoning_signatures[message_id] = signature_text
+
+        if signature_text == previous:
+            return ""
+        if signature_text.startswith(previous):
+            return signature_text[len(previous) :]
+        return signature_text
 
     def feed_line(self, line: str) -> ParsedStreamEvent | None:
         stripped = line.strip()
@@ -314,7 +452,11 @@ class QoderStreamJSONParser:
         if event_type == "assistant":
             message_payload = payload.get("message") if isinstance(payload.get("message"), dict) else payload
             snapshot_text = _join_text_blocks(message_payload)
+            snapshot_reasoning = _join_reasoning_blocks(message_payload)
+            signature_text = _extract_reasoning_signature(message_payload)
             event.text_delta = self._diff_snapshot(message_id, snapshot_text)
+            event.reasoning_delta = self._diff_reasoning_snapshot(message_id, snapshot_reasoning)
+            event.reasoning_signature_delta = self._diff_reasoning_signature(message_id, signature_text)
             return event
 
         if event_type == "result":
@@ -328,9 +470,19 @@ class QoderStreamJSONParser:
                 event.error_type = "api_error"
                 return event
 
-            result_text = _join_text_blocks(payload.get("result"))
+            result_payload = payload.get("result")
+            result_text = _join_text_blocks(result_payload)
+            reasoning_text = _join_reasoning_blocks(result_payload)
+            signature_text = _extract_reasoning_signature(result_payload)
             if result_text:
                 event.text_delta = self._diff_snapshot(message_id, result_text)
+            if reasoning_text:
+                event.reasoning_delta = self._diff_reasoning_snapshot(message_id, reasoning_text)
+            if signature_text:
+                event.reasoning_signature_delta = self._diff_reasoning_signature(
+                    message_id,
+                    signature_text,
+                )
 
             event.finish_reason = _normalize_finish_reason(
                 payload.get("stop_reason")
@@ -357,19 +509,39 @@ class QoderStreamJSONParser:
         if subtype == "message_start":
             nested_message_id = _extract_message_id(stream_payload, message_id)
             self._current_message_id = nested_message_id
-            snapshot_text = _join_text_blocks(stream_payload.get("message"))
+            message_payload = stream_payload.get("message")
+            snapshot_text = _join_text_blocks(message_payload)
+            snapshot_reasoning = _join_reasoning_blocks(message_payload)
+            signature_text = _extract_reasoning_signature(message_payload)
             event.text_delta = self._diff_snapshot(nested_message_id, snapshot_text)
+            event.reasoning_delta = self._diff_reasoning_snapshot(nested_message_id, snapshot_reasoning)
+            event.reasoning_signature_delta = self._diff_reasoning_signature(
+                nested_message_id,
+                signature_text,
+            )
             return event
 
         if subtype == "content_block_start":
             content_block = stream_payload.get("content_block") or stream_payload.get("content")
             snapshot_text = _join_text_blocks(content_block)
+            snapshot_reasoning = _join_reasoning_blocks(content_block)
+            signature_text = _extract_reasoning_signature(content_block)
             event.text_delta = self._diff_snapshot(message_id, snapshot_text)
+            event.reasoning_delta = self._diff_reasoning_snapshot(message_id, snapshot_reasoning)
+            event.reasoning_signature_delta = self._diff_reasoning_signature(message_id, signature_text)
             return event
 
         if subtype == "content_block_delta":
             delta_payload = stream_payload.get("delta")
             event.text_delta = self._append_delta(message_id, _join_text_blocks(delta_payload))
+            event.reasoning_delta = self._append_reasoning_delta(
+                message_id,
+                _join_reasoning_blocks(delta_payload),
+            )
+            event.reasoning_signature_delta = self._append_reasoning_signature(
+                message_id,
+                _extract_reasoning_signature(delta_payload),
+            )
             return event
 
         if subtype == "message_delta":
@@ -398,6 +570,14 @@ class QoderStreamJSONParser:
         first_choice = choices[0] if isinstance(choices[0], dict) else {}
         delta_payload = first_choice.get("delta")
         event.text_delta = self._append_delta(message_id, _extract_openai_chunk_text(first_choice))
+        event.reasoning_delta = self._append_reasoning_delta(
+            message_id,
+            _extract_openai_chunk_reasoning(first_choice),
+        )
+        event.reasoning_signature_delta = self._append_reasoning_signature(
+            message_id,
+            _extract_openai_chunk_reasoning_signature(first_choice),
+        )
         event.tool_call_deltas = _extract_tool_call_deltas(delta_payload)
         event.finish_reason = _normalize_finish_reason(
             first_choice.get("finish_reason") or payload.get("finish_reason")

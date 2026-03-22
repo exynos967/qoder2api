@@ -394,6 +394,8 @@ def build_anthropic_message_response(
     message_id: str,
     model: str,
     output_text: str,
+    reasoning_text: str = "",
+    reasoning_signature: str = "",
     tool_calls: list[dict[str, Any]] | None,
     finish_reason: str | None,
     input_tokens: int,
@@ -401,7 +403,14 @@ def build_anthropic_message_response(
     stop_sequence: str | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
+    normalized_reasoning = reasoning_text.strip()
+    normalized_signature = reasoning_signature.strip()
     normalized_text = output_text.strip()
+    if normalized_reasoning:
+        thinking_block = {"type": "thinking", "thinking": normalized_reasoning}
+        if normalized_signature:
+            thinking_block["signature"] = normalized_signature
+        content.append(thinking_block)
     if normalized_text:
         content.append({"type": "text", "text": normalized_text})
     for tool_call in tool_calls or []:
@@ -442,12 +451,16 @@ class AnthropicStreamTranslator:
         self.message_id = message_id
         self.prompt_tokens = _estimate_tokens(prompt_text)
         self.text_output = ""
+        self.reasoning_output = ""
+        self.reasoning_signature = ""
         self.tool_calls: list[dict[str, Any]] = []
         self.finish_reason: str | None = None
         self.stop_sequences = _normalize_stop_sequences(stop_sequences)
         self._pending_text = ""
         self.matched_stop_sequence: str | None = None
         self._model = "auto"
+        self._thinking_block_index: int | None = None
+        self._thinking_block_stopped = False
         self._text_block_index: int | None = None
         self._text_block_stopped = False
         self._tool_states: dict[int, _ToolBlockState] = {}
@@ -474,6 +487,10 @@ class AnthropicStreamTranslator:
         payloads: list[str] = []
         if self.matched_stop_sequence:
             return payloads
+        if stream_event.reasoning_delta:
+            payloads.extend(self._emit_reasoning_delta(stream_event.reasoning_delta))
+        if stream_event.reasoning_signature_delta:
+            payloads.extend(self._emit_reasoning_signature_delta(stream_event.reasoning_signature_delta))
         if stream_event.text_delta:
             payloads.extend(self._process_text_delta(stream_event.text_delta))
         if stream_event.tool_call_deltas and not self.matched_stop_sequence:
@@ -489,6 +506,7 @@ class AnthropicStreamTranslator:
             self.finish_reason = "stop_sequence"
 
         payloads.extend(self._flush_late_tool_blocks())
+        payloads.extend(self._close_thinking_block())
         if self._text_block_index is not None and not self._text_block_stopped:
             payloads.append(
                 _anthropic_sse_payload(
@@ -510,10 +528,14 @@ class AnthropicStreamTranslator:
             )
             state.stopped = True
 
-        completion_basis = self.text_output.strip()
-        if not completion_basis and self.tool_calls:
-            completion_basis = json.dumps(self.tool_calls, ensure_ascii=False)
-        output_tokens = _estimate_tokens(completion_basis)
+        completion_basis_parts: list[str] = []
+        if self.reasoning_output.strip():
+            completion_basis_parts.append(self.reasoning_output.strip())
+        if self.text_output.strip():
+            completion_basis_parts.append(self.text_output.strip())
+        if not completion_basis_parts and self.tool_calls:
+            completion_basis_parts.append(json.dumps(self.tool_calls, ensure_ascii=False))
+        output_tokens = _estimate_tokens("\n".join(completion_basis_parts))
         payloads.append(
             _anthropic_sse_payload(
                 "message_delta",
@@ -547,7 +569,66 @@ class AnthropicStreamTranslator:
         }
         return [_anthropic_sse_payload("error", payload)]
 
+    def _ensure_thinking_block_started(self) -> list[str]:
+        if self._thinking_block_index is not None:
+            return []
+        self._thinking_block_index = self._next_content_index
+        self._next_content_index += 1
+        return [
+            _anthropic_sse_payload(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": self._thinking_block_index,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                },
+            )
+        ]
 
+    def _emit_reasoning_delta(self, delta_text: str) -> list[str]:
+        if not delta_text:
+            return []
+        payloads = self._ensure_thinking_block_started()
+        self.reasoning_output += delta_text
+        payloads.append(
+            _anthropic_sse_payload(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": self._thinking_block_index,
+                    "delta": {"type": "thinking_delta", "thinking": delta_text},
+                },
+            )
+        )
+        return payloads
+
+    def _emit_reasoning_signature_delta(self, signature_text: str) -> list[str]:
+        if not signature_text:
+            return []
+        payloads = self._ensure_thinking_block_started()
+        self.reasoning_signature += signature_text
+        payloads.append(
+            _anthropic_sse_payload(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": self._thinking_block_index,
+                    "delta": {"type": "signature_delta", "signature": signature_text},
+                },
+            )
+        )
+        return payloads
+
+    def _close_thinking_block(self) -> list[str]:
+        if self._thinking_block_index is None or self._thinking_block_stopped:
+            return []
+        self._thinking_block_stopped = True
+        return [
+            _anthropic_sse_payload(
+                "content_block_stop",
+                {"type": "content_block_stop", "index": self._thinking_block_index},
+            )
+        ]
 
     def _process_text_delta(self, delta_text: str) -> list[str]:
         self._pending_text += delta_text
@@ -586,6 +667,7 @@ class AnthropicStreamTranslator:
 
     def _emit_text_delta(self, delta_text: str) -> list[str]:
         payloads: list[str] = []
+        payloads.extend(self._close_thinking_block())
         if self._text_block_index is None:
             self._text_block_index = self._next_content_index
             self._next_content_index += 1
@@ -614,6 +696,15 @@ class AnthropicStreamTranslator:
 
     def _emit_tool_call_deltas(self, delta_tool_calls: list[dict[str, Any]]) -> list[str]:
         payloads: list[str] = []
+        payloads.extend(self._close_thinking_block())
+        if self._text_block_index is not None and not self._text_block_stopped:
+            payloads.append(
+                _anthropic_sse_payload(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": self._text_block_index},
+                )
+            )
+            self._text_block_stopped = True
         self.tool_calls = merge_tool_call_deltas(self.tool_calls, delta_tool_calls)
 
         for item in delta_tool_calls:
@@ -688,6 +779,15 @@ class AnthropicStreamTranslator:
 
     def _flush_late_tool_blocks(self) -> list[str]:
         payloads: list[str] = []
+        payloads.extend(self._close_thinking_block())
+        if self._text_block_index is not None and not self._text_block_stopped:
+            payloads.append(
+                _anthropic_sse_payload(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": self._text_block_index},
+                )
+            )
+            self._text_block_stopped = True
         for index, tool_call in enumerate(self.tool_calls):
             if index in self._tool_states:
                 continue
