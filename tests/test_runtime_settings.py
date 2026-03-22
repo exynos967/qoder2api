@@ -16,6 +16,7 @@ def test_runtime_settings_roundtrip(tmp_path) -> None:
             'proxy_url': 'http://127.0.0.1:7890',
             'llmapi_api_key': 'sk-demo',
             'account_pool_max_concurrency': 7,
+            'default_stream': False,
         }
     )
     loaded = load_runtime_settings(settings)
@@ -24,6 +25,7 @@ def test_runtime_settings_roundtrip(tmp_path) -> None:
     assert snapshot.proxy_url == 'http://127.0.0.1:7890'
     assert loaded.llmapi_api_key == 'sk-demo'
     assert loaded.account_pool_max_concurrency == 7
+    assert loaded.default_stream is False
 
 
 def test_qoder_api_default_client_uses_runtime_proxy(monkeypatch, tmp_path) -> None:
@@ -52,6 +54,7 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
 
     payload = asyncio.run(app_module.webui_get_runtime_settings())
     assert payload['settings']['account_pool_max_concurrency'] == 4
+    assert payload['settings']['default_stream'] is True
     assert payload['limiter']['limit'] == 4
 
     updated = asyncio.run(
@@ -60,6 +63,7 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
                 proxy_url='http://127.0.0.1:7890',
                 llmapi_api_key='sk-demo',
                 account_pool_max_concurrency=9,
+                default_stream=False,
             )
         )
     )
@@ -68,3 +72,4 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
     assert updated['settings']['proxy_url'] == 'http://127.0.0.1:7890'
     assert updated['settings']['llmapi_api_key'] == 'sk-demo'
     assert updated['limiter']['limit'] == 9
+    assert updated['settings']['default_stream'] is False

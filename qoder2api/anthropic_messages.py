@@ -29,7 +29,7 @@ class AnthropicMessagesRequest(BaseModel):
     max_tokens: int = Field(default=1024, ge=1)
     messages: list[AnthropicMessageParam] = Field(default_factory=list)
     system: str | list[dict[str, Any]] | None = None
-    stream: bool = False
+    stream: bool | None = None
     temperature: float | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi.testclient import TestClient
-
 from qoder2api import app as app_module
+from qoder2api.runtime_settings import RuntimeSettingsSnapshot
 from qoder2api.anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicStreamTranslator,
@@ -19,6 +19,24 @@ class _FakeLimiter:
     @asynccontextmanager
     async def slot(self):
         yield
+
+
+class _FakeRuntimeSettingsManager:
+    def __init__(self, *, default_stream: bool = True) -> None:
+        self._snapshot = RuntimeSettingsSnapshot(default_stream=default_stream)
+
+    def load(self) -> RuntimeSettingsSnapshot:
+        return self._snapshot
+
+
+async def _collect_streaming_body(response) -> list[str]:
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        if isinstance(chunk, bytes):
+            chunks.append(chunk.decode('utf-8'))
+        else:
+            chunks.append(chunk)
+    return [line for line in ''.join(chunks).splitlines() if line]
 
 
 class _FakeAnthropicToolInvoker:
@@ -120,6 +138,7 @@ def test_convert_anthropic_request_to_chat_request_supports_tools_and_images() -
     request = AnthropicMessagesRequest.model_validate(
         {
             "model": "MiniMax-M2.7",
+            "stream": False,
             "max_tokens": 256,
             "system": "你是一个测试助手。",
             "messages": [
@@ -214,17 +233,38 @@ def test_convert_anthropic_request_to_chat_request_supports_tools_and_images() -
     assert chat_request.tool_choice == {"type": "function", "function": {"name": "get_weather"}}
 
 
+def test_anthropic_messages_use_runtime_default_stream_when_omitted(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicTextInvoker()
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(default_stream=True))
+
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
+            "model": "GLM-5",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "你好"}],
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
+
+    assert response.status_code == 200
+    lines = asyncio.run(_collect_streaming_body(response))
+    pairs = _extract_sse_pairs(lines)
+    assert pairs[0][0] == "message_start"
+    assert pairs[-1][0] == "message_stop"
+
+
 def test_anthropic_messages_non_stream_returns_tool_use(monkeypatch) -> None:
     fake_invoker = _FakeAnthropicToolInvoker()
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
     monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
 
-    client = TestClient(app_module.app)
-    response = client.post(
-        "/v1/messages",
-        json={
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
             "model": "MiniMax-M2.7",
             "max_tokens": 128,
+            "stream": False,
             "messages": [{"role": "user", "content": "请调用工具"}],
             "tools": [
                 {
@@ -237,11 +277,12 @@ def test_anthropic_messages_non_stream_returns_tool_use(monkeypatch) -> None:
                 }
             ],
             "tool_choice": {"type": "any"},
-        },
+        }
     )
+    response = asyncio.run(app_module.anthropic_messages(request))
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = json.loads(response.body)
     assert payload["type"] == "message"
     assert payload["role"] == "assistant"
     assert payload["stop_reason"] == "tool_use"
@@ -261,20 +302,18 @@ def test_anthropic_messages_stream_emits_named_events(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
     monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
 
-    client = TestClient(app_module.app)
-    with client.stream(
-        "POST",
-        "/v1/messages",
-        json={
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
             "model": "GLM-5",
             "max_tokens": 64,
             "stream": True,
             "messages": [{"role": "user", "content": "你好"}],
-        },
-    ) as response:
-        assert response.status_code == 200
-        lines = [line for line in response.iter_lines() if line]
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
 
+    assert response.status_code == 200
+    lines = asyncio.run(_collect_streaming_body(response))
     pairs = _extract_sse_pairs(lines)
     assert [event for event, _ in pairs] == [
         "message_start",
@@ -353,19 +392,19 @@ def test_anthropic_messages_non_stream_applies_stop_sequences(monkeypatch) -> No
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
     monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
 
-    client = TestClient(app_module.app)
-    response = client.post(
-        "/v1/messages",
-        json={
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
             "model": "GLM-5",
             "max_tokens": 128,
+            "stream": False,
             "stop_sequences": ["<END>"],
             "messages": [{"role": "user", "content": "打个招呼"}],
-        },
+        }
     )
+    response = asyncio.run(app_module.anthropic_messages(request))
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = json.loads(response.body)
     assert payload["stop_reason"] == "stop_sequence"
     assert payload["stop_sequence"] == "<END>"
     assert payload["content"] == [{"type": "text", "text": "你好"}]
@@ -376,21 +415,19 @@ def test_anthropic_messages_stream_applies_stop_sequences(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
     monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
 
-    client = TestClient(app_module.app)
-    with client.stream(
-        "POST",
-        "/v1/messages",
-        json={
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
             "model": "GLM-5",
             "max_tokens": 64,
             "stream": True,
             "stop_sequences": ["<END>"],
             "messages": [{"role": "user", "content": "你好"}],
-        },
-    ) as response:
-        assert response.status_code == 200
-        lines = [line for line in response.iter_lines() if line]
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
 
+    assert response.status_code == 200
+    lines = asyncio.run(_collect_streaming_body(response))
     pairs = _extract_sse_pairs(lines)
     text_deltas = [
         payload["delta"]["text"]

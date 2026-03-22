@@ -29,6 +29,7 @@ class RuntimeSettingsSnapshot(BaseModel):
     proxy_url: str = ''
     llmapi_api_key: str = ''
     account_pool_max_concurrency: int = Field(default=4, ge=1, le=512)
+    default_stream: bool = True
 
     model_config = ConfigDict(extra='ignore')
 

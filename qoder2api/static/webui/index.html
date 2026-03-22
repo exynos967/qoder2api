@@ -331,6 +331,13 @@
                                         <label for="settings-account-pool-max-concurrency">账号池总限制并发数</label>
                                         <input type="number" id="settings-account-pool-max-concurrency" min="1" max="512" placeholder="4">
                                     </div>
+                                    <div class="form-group">
+                                        <label class="checkbox-label" for="settings-default-stream">
+                                            <input type="checkbox" id="settings-default-stream">
+                                            <span>默认使用流式响应</span>
+                                        </label>
+                                        <p class="hint">未显式传入 stream 时，按这里的默认模式返回；默认开启流式。</p>
+                                    </div>
                                     <p class="hint">保存后会立即作用于新的上游请求；代理地址会同步写入当前进程环境变量。</p>
                                     <span id="settings-runtime-path" hidden aria-hidden="true">--</span>
                                     <p id="settings-runtime-status" class="hint">加载中...</p>

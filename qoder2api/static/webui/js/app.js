@@ -657,10 +657,11 @@ function renderRuntimeSettings(payload) {
     $('settings-proxy-url').value = settings.proxy_url || '';
     $('settings-llmapi-api-key').value = settings.llmapi_api_key || '';
     $('settings-account-pool-max-concurrency').value = String(settings.account_pool_max_concurrency ?? 4);
+    $('settings-default-stream').checked = settings.default_stream !== false;
     setText('settings-runtime-path', payload?.path || '--');
     setText(
         'settings-runtime-status',
-        `当前生效并发 ${limit}，运行中 ${active}。代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
+        `当前生效并发 ${limit}，运行中 ${active}。默认${settings.default_stream !== false ? '流式' : '非流式'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
     );
 
     setText('dashboard-concurrency-limit', String(limit));
@@ -845,6 +846,7 @@ async function saveRuntimeSettings(event) {
     const llmapiApiKey = $('settings-llmapi-api-key').value.trim();
     const concurrencyValue = $('settings-account-pool-max-concurrency').value.trim();
     const parsedConcurrency = Number(concurrencyValue || '4');
+    const defaultStream = $('settings-default-stream').checked;
 
     if (!Number.isInteger(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 512) {
         showToast('账号池总限制并发数必须是 1 到 512 的整数', 'warning');
@@ -859,6 +861,7 @@ async function saveRuntimeSettings(event) {
                 proxy_url: proxyUrl,
                 llmapi_api_key: llmapiApiKey,
                 account_pool_max_concurrency: parsedConcurrency,
+                default_stream: defaultStream,
             }),
         });
         renderRuntimeSettings(result);
@@ -954,6 +957,7 @@ async function submitPlayground(event) {
     const payload = {
         model,
         messages,
+        stream: false,
     };
     if (maxTokensValue) {
         payload.max_tokens = Number(maxTokensValue);
