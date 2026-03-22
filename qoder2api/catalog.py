@@ -25,8 +25,8 @@ class QoderModelInfo:
         return _normalize_public_id(self.id, self.display_name)
 
 
-_DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
-_PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax M2.7"}
+_DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.5"}
+_PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax-M2.5"}
 
 
 def _normalize_public_id(model_id: str, display_name: str) -> str:
@@ -34,8 +34,8 @@ def _normalize_public_id(model_id: str, display_name: str) -> str:
     if override:
         return override
 
-    candidate = display_name or model_id
-    normalized = " ".join(candidate.replace("_", " ").replace("-", " ").split())
+    candidate = (display_name or model_id).strip()
+    normalized = " ".join(candidate.split())
     return normalized or model_id
 
 
@@ -49,7 +49,7 @@ _FALLBACK_MODELS = [
     QoderModelInfo(id="q35model", display_name="Qwen3.5-Plus", scene="chat", price_factor=0.2),
     QoderModelInfo(id="gmodel", display_name="GLM-5", scene="chat", price_factor=0.5),
     QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", price_factor=0.3),
-    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.7", scene="chat", price_factor=0.2),
+    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.5", scene="chat", price_factor=0.2),
 ]
 
 
@@ -103,19 +103,30 @@ def _register_alias(aliases: dict[str, str], alias: str, target: str) -> None:
         aliases[normalized] = target
 
 
+def _space_alias(value: str) -> str:
+    return " ".join(value.replace("-", " ").replace("_", " ").split())
+
+
+def _hyphen_alias(value: str) -> str:
+    return "-".join(value.replace("_", "-").split())
+
+
 def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
     """构建外部模型名到 Qoder 内部 key 的映射。"""
     aliases: dict[str, str] = {}
     for model in models:
-        for alias in (
+        raw_aliases = (
             model.id,
             model.display_name,
             model.public_id,
-            f"qoder/{model.id}",
-            f"qoder/{model.display_name}",
-            f"qoder/{model.public_id}",
-        ):
+            _space_alias(model.display_name),
+            _space_alias(model.public_id),
+            _hyphen_alias(model.display_name),
+            _hyphen_alias(model.public_id),
+        )
+        for alias in raw_aliases:
             _register_alias(aliases, alias, model.id)
+            _register_alias(aliases, f"qoder/{alias}", model.id)
     return aliases
 
 
