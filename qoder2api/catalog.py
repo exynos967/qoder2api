@@ -18,6 +18,7 @@ class QoderModelInfo:
     max_output_tokens: int = 32768
     is_default: bool = False
     is_reasoning: bool = False
+    is_vl: bool = False
     price_factor: float = 0.0
 
     @property
@@ -40,16 +41,16 @@ def _normalize_public_id(model_id: str, display_name: str) -> str:
 
 
 _FALLBACK_MODELS = [
-    QoderModelInfo(id="auto", display_name="Auto", scene="chat", is_default=True, price_factor=1.0),
-    QoderModelInfo(id="ultimate", display_name="Ultimate", scene="chat", is_reasoning=True, price_factor=1.6),
-    QoderModelInfo(id="performance", display_name="Performance", scene="chat", price_factor=1.1),
-    QoderModelInfo(id="efficient", display_name="Efficient", scene="chat", price_factor=0.3),
-    QoderModelInfo(id="lite", display_name="Lite", scene="chat", price_factor=0.0),
-    QoderModelInfo(id="qmodel", display_name="Qwen-Coder-Qoder-1.0", scene="chat", price_factor=0.2),
-    QoderModelInfo(id="q35model", display_name="Qwen3.5-Plus", scene="chat", price_factor=0.2),
-    QoderModelInfo(id="gmodel", display_name="GLM-5", scene="chat", price_factor=0.5),
-    QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", price_factor=0.3),
-    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.5", scene="chat", price_factor=0.2),
+    QoderModelInfo(id="auto", display_name="Auto", scene="chat", is_default=True, is_vl=True, price_factor=1.0),
+    QoderModelInfo(id="ultimate", display_name="Ultimate", scene="chat", is_reasoning=True, is_vl=True, price_factor=1.6),
+    QoderModelInfo(id="performance", display_name="Performance", scene="chat", is_vl=True, price_factor=1.1),
+    QoderModelInfo(id="efficient", display_name="Efficient", scene="chat", is_vl=True, price_factor=0.3),
+    QoderModelInfo(id="lite", display_name="Lite", scene="chat", is_vl=False, price_factor=0.0),
+    QoderModelInfo(id="qmodel", display_name="Qwen-Coder-Qoder-1.0", scene="chat", is_vl=True, price_factor=0.2),
+    QoderModelInfo(id="q35model", display_name="Qwen3.5-Plus", scene="chat", is_vl=True, price_factor=0.2),
+    QoderModelInfo(id="gmodel", display_name="GLM-5", scene="chat", is_vl=True, price_factor=0.5),
+    QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", is_vl=True, price_factor=0.3),
+    QoderModelInfo(id="mmodel", display_name="MiniMax-M2.5", scene="chat", is_vl=True, price_factor=0.2),
 ]
 
 
@@ -90,6 +91,7 @@ def load_qoder_models(qoder_home: Path, scene: str = "chat") -> list[QoderModelI
                 max_output_tokens=int(item.get("max_output_tokens") or 32768),
                 is_default=bool(item.get("is_default")),
                 is_reasoning=bool(item.get("is_reasoning")),
+                is_vl=bool(item.get("is_vl")),
                 price_factor=float(item.get("price_factor") or 0.0),
             )
         )

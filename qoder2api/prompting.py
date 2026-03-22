@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,32 @@ _ROLE_LABELS = {
     "assistant": "助手",
     "tool": "工具",
 }
+_COMMON_IMAGE_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+}
+_INLINE_IMAGE_NAMES = {
+    "image/jpeg": "inline-image.jpg",
+    "image/png": "inline-image.png",
+    "image/gif": "inline-image.gif",
+    "image/webp": "inline-image.webp",
+    "image/bmp": "inline-image.bmp",
+    "image/svg+xml": "inline-image.svg",
+}
+
+
+@dataclass(slots=True)
+class PreparedAttachment:
+    """待发送给 Qoder 的附件。"""
+
+    url: str
+    display_name: str
+    local_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -23,36 +51,108 @@ class PreparedPrompt:
     """压平后的请求。"""
 
     prompt: str
-    attachments: list[Path]
+    attachments: list[PreparedAttachment]
 
 
-def _resolve_local_attachment(raw_url: str | None) -> Path:
+def _inline_image_name(mime_type: str) -> str:
+    normalized = mime_type.strip().lower()
+    if normalized in _INLINE_IMAGE_NAMES:
+        return _INLINE_IMAGE_NAMES[normalized]
+
+    extension = normalized.split("/", 1)[-1].replace("+xml", "")
+    extension = extension.replace("jpeg", "jpg") or "bin"
+    return f"inline-image.{extension}"
+
+
+def _guess_image_mime_type(path: Path) -> str:
+    guessed, _ = mimetypes.guess_type(path.name)
+    if guessed and guessed.startswith("image/"):
+        return guessed
+
+    override = _COMMON_IMAGE_MIME_TYPES.get(path.suffix.lower())
+    if override:
+        return override
+
+    raise ValueError(f"不支持的图片类型: {path.name}")
+
+
+def _build_local_attachment(path: Path) -> PreparedAttachment:
+    resolved = path.expanduser().resolve()
+    if not resolved.exists() or not resolved.is_file():
+        raise ValueError(f"图片附件不存在: {resolved}")
+
+    mime_type = _guess_image_mime_type(resolved)
+    encoded = base64.b64encode(resolved.read_bytes()).decode("ascii")
+    return PreparedAttachment(
+        url=f"data:{mime_type};base64,{encoded}",
+        display_name=resolved.name,
+        local_path=resolved,
+    )
+
+
+def _build_data_url_attachment(raw_url: str) -> PreparedAttachment:
+    header, separator, _ = raw_url.partition(",")
+    if not separator:
+        raise ValueError("图片 data URL 格式不合法")
+
+    mime_type = header[5:].split(";", 1)[0].strip().lower()
+    if not mime_type.startswith("image/"):
+        raise ValueError("当前只支持图片类型的 data URL")
+
+    return PreparedAttachment(
+        url=raw_url,
+        display_name=_inline_image_name(mime_type),
+    )
+
+
+def _resolve_local_attachment(raw_url: str | None) -> PreparedAttachment:
     if not raw_url:
         raise ValueError("图片内容缺少可用的 url")
 
     parsed = urlparse(raw_url)
     if parsed.scheme == "file":
-        return Path(unquote(parsed.path)).expanduser().resolve()
+        return _build_local_attachment(Path(unquote(parsed.path)))
 
-    candidate = Path(raw_url).expanduser()
-    if candidate.exists():
-        return candidate.resolve()
+    if parsed.scheme == "data":
+        return _build_data_url_attachment(raw_url)
 
-    raise ValueError("qoder2api 当前只支持本地图片附件（绝对路径或 file:// URL）")
+    if parsed.scheme in {"http", "https"}:
+        raise ValueError("qoder2api 当前只支持本地图片附件或 data URL 图片输入")
+
+    return _build_local_attachment(Path(raw_url).expanduser())
 
 
-def _append_unique_attachment(attachments: list[Path], path: Path) -> None:
-    if path not in attachments:
-        attachments.append(path)
+def _append_unique_attachment(
+    attachments: list[PreparedAttachment],
+    attachment: PreparedAttachment,
+) -> None:
+    if attachment not in attachments:
+        attachments.append(attachment)
 
 
 def _serialize_unknown_block(item: dict[str, Any]) -> str:
     return json.dumps(item, ensure_ascii=False, sort_keys=True)
 
 
+def _extract_image_url(item: dict[str, Any]) -> str | None:
+    raw_image = item.get("image_url") or item.get("source") or {}
+    if isinstance(raw_image, dict):
+        raw_url = raw_image.get("url") or raw_image.get("path")
+        if raw_url:
+            return str(raw_url)
+
+        media_type = str(raw_image.get("media_type") or raw_image.get("mime_type") or "").strip()
+        raw_data = str(raw_image.get("data") or "").strip()
+        if media_type and raw_data:
+            return f"data:{media_type};base64,{raw_data}"
+        return None
+
+    return str(raw_image)
+
+
 def _content_to_text(
     content: str | list[dict[str, Any]] | None,
-    attachments: list[Path],
+    attachments: list[PreparedAttachment],
 ) -> str:
     if content is None:
         return ""
@@ -70,15 +170,9 @@ def _content_to_text(
             continue
 
         if block_type in {"image_url", "input_image"}:
-            raw_image = item.get("image_url") or item.get("source") or {}
-            if isinstance(raw_image, dict):
-                raw_url = raw_image.get("url") or raw_image.get("path")
-            else:
-                raw_url = str(raw_image)
-
-            attachment = _resolve_local_attachment(raw_url)
+            attachment = _resolve_local_attachment(_extract_image_url(item))
             _append_unique_attachment(attachments, attachment)
-            lines.append(f"[图片附件: {attachment.name}]")
+            lines.append(f"[图片附件: {attachment.display_name}]")
             continue
 
         lines.append(f"[未识别内容块] {_serialize_unknown_block(item)}")
@@ -86,7 +180,10 @@ def _content_to_text(
     return "\n".join(line for line in lines if line).strip()
 
 
-def _render_message_block(message: ChatMessage, attachments: list[Path]) -> str:
+def _render_message_block(
+    message: ChatMessage,
+    attachments: list[PreparedAttachment],
+) -> str:
     role = _ROLE_LABELS.get(message.role, message.role)
     content_text = _content_to_text(message.content, attachments) or "(空内容)"
 
@@ -136,7 +233,7 @@ def render_openai_messages(
     if not messages:
         raise ValueError("messages 不能为空")
 
-    attachments: list[Path] = []
+    attachments: list[PreparedAttachment] = []
     system_blocks: list[str] = []
     dialogue_blocks: list[str] = []
 

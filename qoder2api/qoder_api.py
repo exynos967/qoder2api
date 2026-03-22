@@ -28,6 +28,7 @@ from .auth_state import (
     save_cached_user_info,
 )
 from .catalog import QoderModelInfo
+from .prompting import PreparedAttachment
 from .crypto import (
     build_bearer_token,
     build_pkce_challenge,
@@ -396,6 +397,7 @@ class QoderAPIClient:
         *,
         qoder_home: Path,
         prompt: str,
+        attachments: list[PreparedAttachment],
         model_info: QoderModelInfo,
         max_tokens: int | None,
     ) -> str:
@@ -403,6 +405,7 @@ class QoderAPIClient:
         async for event in self.stream_chat(
             qoder_home=qoder_home,
             prompt=prompt,
+            attachments=attachments,
             model_info=model_info,
             max_tokens=max_tokens,
         ):
@@ -415,12 +418,14 @@ class QoderAPIClient:
         *,
         qoder_home: Path,
         prompt: str,
+        attachments: list[PreparedAttachment],
         model_info: QoderModelInfo,
         max_tokens: int | None,
     ) -> AsyncIterator[ParsedStreamEvent]:
         cached = await self.ensure_cached_user(qoder_home)
         request_body = self.build_chat_request(
             prompt=prompt,
+            attachments=attachments,
             model_info=model_info,
             user_type=cached.user_type,
             max_tokens=max_tokens,
@@ -598,14 +603,47 @@ class QoderAPIClient:
     def _build_text_content(self, text: str) -> dict[str, str]:
         return {"type": "text", "text": text}
 
+    def _build_image_content(self, attachment: PreparedAttachment) -> dict[str, Any]:
+        return {"type": "image_url", "image_url": {"url": attachment.url}}
+
+    def _build_attachment_reminder(
+        self,
+        attachment: PreparedAttachment,
+    ) -> dict[str, str] | None:
+        if attachment.local_path is None:
+            return None
+
+        return self._build_text_content(
+            f"<system-reminder>\n\nabove is an image file in {attachment.local_path}\n\n</system-reminder>"
+        )
+
+    def _build_user_message(
+        self,
+        *,
+        prompt: str,
+        attachments: list[PreparedAttachment],
+    ) -> dict[str, Any]:
+        if not attachments:
+            return {"role": "user", "content": prompt}
+
+        contents: list[dict[str, Any]] = [self._build_text_content(prompt)]
+        for attachment in attachments:
+            contents.append(self._build_image_content(attachment))
+            reminder = self._build_attachment_reminder(attachment)
+            if reminder is not None:
+                contents.append(reminder)
+
+        return {"role": "user", "content": "", "contents": contents}
+
     def _build_chat_context(
         self,
         *,
         prompt: str,
+        attachments: list[PreparedAttachment],
         model_info: QoderModelInfo,
     ) -> dict[str, Any]:
         return {
-            "imageUrls": [],
+            "imageUrls": None if attachments else [],
             "text": self._build_text_content(prompt),
             "features": [],
             "extra": {
@@ -635,6 +673,7 @@ class QoderAPIClient:
         self,
         *,
         prompt: str,
+        attachments: list[PreparedAttachment],
         model_info: QoderModelInfo,
         user_type: str,
         max_tokens: int | None,
@@ -647,7 +686,7 @@ class QoderAPIClient:
             "display_name": model_info.display_name,
             "model": "",
             "format": "openai",
-            "is_vl": True,
+            "is_vl": model_info.is_vl,
             "is_reasoning": model_info.is_reasoning,
             "api_key": "",
             "url": "",
@@ -660,8 +699,12 @@ class QoderAPIClient:
             "chatRecordId": request_id,
             "stream": True,
             "chatTask": _DEFAULT_CHAT_TASK,
-            "chatContext": self._build_chat_context(prompt=prompt, model_info=model_info),
-            "imageUrls": [],
+            "chatContext": self._build_chat_context(
+                prompt=prompt,
+                attachments=attachments,
+                model_info=model_info,
+            ),
+            "imageUrls": None if attachments else [],
             "isReply": True,
             "isRetry": False,
             "sessionId": session_id,
@@ -679,7 +722,7 @@ class QoderAPIClient:
             "taskId": _DEFAULT_TASK_ID,
             "model_config": model_config,
             "customModel": None,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [self._build_user_message(prompt=prompt, attachments=attachments)],
             "tools": [],
             "mode": "",
             "passkey": "",

@@ -8,6 +8,7 @@ from typing import AsyncIterator
 
 from .accounts import QoderAccount, QoderAccountPool
 from .catalog import QoderModelInfo, load_qoder_models, resolve_model_name
+from .prompting import PreparedAttachment
 from .qoder_api import QoderAPIClient, QoderAPIError
 from .settings import Settings
 from .streaming import ParsedStreamEvent
@@ -119,10 +120,13 @@ class QoderCLIInvoker:
         )
 
     @staticmethod
-    def _ensure_no_attachments(attachments: list[Path]) -> None:
-        if attachments:
+    def _validate_attachments(
+        attachments: list[PreparedAttachment],
+        model_info: QoderModelInfo,
+    ) -> None:
+        if attachments and not model_info.is_vl:
             raise QoderCLIError(
-                "当前纯协议聊天暂不支持本地图片附件上传",
+                f"模型 {model_info.public_id} 当前不支持图片输入",
                 status_code=400,
                 error_type="invalid_request_error",
             )
@@ -131,18 +135,19 @@ class QoderCLIInvoker:
         self,
         *,
         prompt: str,
-        attachments: list[Path],
+        attachments: list[PreparedAttachment],
         model: str | None,
         max_tokens: int | None,
         preferred_account_id: str | None = None,
     ) -> tuple[str, str]:
-        self._ensure_no_attachments(attachments)
         context = self.select_context(preferred_account_id=preferred_account_id)
         model_info, resolved_model = self._resolve_model_info(context, model)
+        self._validate_attachments(attachments, model_info)
         try:
             output_text = await self.api_client.run_text(
                 qoder_home=context.qoder_home,
                 prompt=prompt,
+                attachments=attachments,
                 model_info=model_info,
                 max_tokens=max_tokens,
             )
@@ -161,20 +166,21 @@ class QoderCLIInvoker:
         self,
         *,
         prompt: str,
-        attachments: list[Path],
+        attachments: list[PreparedAttachment],
         model: str | None,
         max_tokens: int | None,
         preferred_account_id: str | None = None,
     ) -> tuple[AsyncIterator[ParsedStreamEvent], str]:
-        self._ensure_no_attachments(attachments)
         context = self.select_context(preferred_account_id=preferred_account_id)
         model_info, resolved_model = self._resolve_model_info(context, model)
+        self._validate_attachments(attachments, model_info)
 
         async def _api_iterator() -> AsyncIterator[ParsedStreamEvent]:
             try:
                 async for event in self.api_client.stream_chat(
                     qoder_home=context.qoder_home,
                     prompt=prompt,
+                    attachments=attachments,
                     model_info=model_info,
                     max_tokens=max_tokens,
                 ):

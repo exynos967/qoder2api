@@ -8,6 +8,7 @@ import httpx
 
 from qoder2api.auth_state import load_cached_user_info, load_machine_id
 from qoder2api.catalog import QoderModelInfo
+from qoder2api.prompting import PreparedAttachment
 from qoder2api.qoder_api import QoderAPIClient
 from qoder2api.settings import Settings
 from qoder2api.streaming import QoderStreamJSONParser
@@ -196,6 +197,7 @@ def test_build_chat_request_matches_qodercli_shape(tmp_path: Path) -> None:
 
     payload = client.build_chat_request(
         prompt="reply_ok",
+        attachments=[],
         model_info=model_info,
         user_type="personal_standard",
         max_tokens=256,
@@ -208,15 +210,57 @@ def test_build_chat_request_matches_qodercli_shape(tmp_path: Path) -> None:
     assert payload["chatPrompt"] == ""
     assert payload["messages"] == [{"role": "user", "content": "reply_ok"}]
     assert payload["chatContext"]["text"] == {"type": "text", "text": "reply_ok"}
+    assert payload["chatContext"]["imageUrls"] == []
     assert payload["chatContext"]["extra"]["originalContent"] == {"type": "text", "text": "reply_ok"}
     assert payload["chatContext"]["extra"]["modelConfig"] == {"key": "ultimate", "is_reasoning": True}
     assert payload["model_config"]["model"] == ""
     assert payload["model_config"]["source"] == "system"
+    assert payload["model_config"]["is_vl"] is False
     assert payload["parameters"] == {"max_tokens": 256}
     assert payload["business"]["product"] == "cli"
     assert payload["business"]["type"] == "agent"
     assert payload["business"]["name"] == "reply_ok"
     assert payload["business"]["stage"] == "start"
+
+
+def test_build_chat_request_with_image_attachment_matches_qodercli_shape(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / ".qoder"), workspace=str(tmp_path))
+    client = QoderAPIClient(settings)
+    model_info = QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", is_vl=True)
+    attachment = PreparedAttachment(
+        url="data:image/png;base64,AAAA",
+        display_name="demo.png",
+        local_path=Path("/tmp/demo.png"),
+    )
+
+    payload = client.build_chat_request(
+        prompt="describe_image",
+        attachments=[attachment],
+        model_info=model_info,
+        user_type="personal_standard",
+        max_tokens=128,
+    )
+
+    assert payload["imageUrls"] is None
+    assert payload["chatContext"]["imageUrls"] is None
+    assert payload["messages"] == [
+        {
+            "role": "user",
+            "content": "",
+            "contents": [
+                {"type": "text", "text": "describe_image"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {
+                    "type": "text",
+                    "text": "<system-reminder>\n\nabove is an image file in /tmp/demo.png\n\n</system-reminder>",
+                },
+            ],
+        }
+    ]
+    assert payload["model_config"]["key"] == "kmodel"
+    assert payload["model_config"]["display_name"] == "Kimi-K2.5"
+    assert payload["model_config"]["is_vl"] is True
+    assert payload["parameters"] == {"max_tokens": 128}
 
 
 
