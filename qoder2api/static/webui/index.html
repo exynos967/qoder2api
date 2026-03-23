@@ -354,6 +354,16 @@
                                                     <span class="switch-toggle-state">已关闭</span>
                                                 </button>
                                             </div>
+                                            <div class="switch-row">
+                                                <div class="switch-copy">
+                                                    <span class="switch-title">启用调试日志</span>
+                                                    <p class="hint">开启后程序日志会记录完整请求体，包括 <code>/v1/chat/completions</code> 与 <code>/v1/messages</code>，便于排查客户端链路问题。</p>
+                                                </div>
+                                                <button type="button" id="settings-debug-logging-enabled" class="switch-toggle" role="switch" aria-checked="false" data-enabled="0">
+                                                    <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                                                    <span class="switch-toggle-state">已关闭</span>
+                                                </button>
+                                            </div>
                                         </div>
                                         <p class="hint">OpenAI 默认开启流式；Anthropic 默认关闭流式，以兼容更多 Anthropic 格式客户端。</p>
                                     </div>
@@ -370,7 +380,7 @@
                 </section>
 
                 <section id="playground-section" class="section">
-                    <div class="surface-grid stack-grid">
+                    <div class="surface-grid playground-grid playground-layout">
                         <div class="card surface-main">
                             <div class="card-header">
                                 <div>
@@ -406,7 +416,7 @@
                             </div>
                         </div>
 
-                        <div class="card surface-side terminal-card">
+                        <div class="card surface-side terminal-card playground-response-card">
                             <div class="card-header">
                                 <div>
                                     <span>模型响应</span>

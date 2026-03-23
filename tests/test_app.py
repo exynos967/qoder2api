@@ -22,10 +22,12 @@ class _FakeRuntimeSettingsManager:
         *,
         default_stream_openai: bool = True,
         default_stream_anthropic: bool = False,
+        debug_logging_enabled: bool = False,
     ) -> None:
         self._snapshot = RuntimeSettingsSnapshot(
             default_stream_openai=default_stream_openai,
             default_stream_anthropic=default_stream_anthropic,
+            debug_logging_enabled=debug_logging_enabled,
         )
 
     def load(self) -> RuntimeSettingsSnapshot:
@@ -271,3 +273,50 @@ def test_chat_completions_stream_emits_reasoning_content(monkeypatch) -> None:
     ]
     assert "".join(reasoning_deltas) == "先分析一下"
     assert "".join(content_deltas) == "最终答案"
+
+
+def test_chat_completions_does_not_log_payload_when_debug_logging_disabled(monkeypatch) -> None:
+    fake_invoker = _FakeStreamingTextInvoker()
+    log_messages: list[str] = []
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(debug_logging_enabled=False))
+    monkeypatch.setattr(app_module.logger, "info", lambda message, *args: log_messages.append(message % args if args else message))
+
+    request = app_module.ChatCompletionRequest.model_validate(
+        {
+            "model": "GLM-5",
+            "stream": False,
+            "messages": [{"role": "user", "content": "请只回复 OK"}],
+        }
+    )
+    response = asyncio.run(app_module.chat_completions(request))
+
+    assert response.status_code == 200
+    assert not any("debug_request route=/v1/chat/completions" in item for item in log_messages)
+
+
+def test_chat_completions_logs_raw_openai_payload_when_debug_logging_enabled(monkeypatch) -> None:
+    fake_invoker = _FakeStreamingTextInvoker()
+    log_messages: list[str] = []
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(debug_logging_enabled=True))
+    monkeypatch.setattr(app_module.logger, "info", lambda message, *args: log_messages.append(message % args if args else message))
+
+    request = app_module.ChatCompletionRequest.model_validate(
+        {
+            "model": "GLM-5",
+            "stream": False,
+            "messages": [{"role": "user", "content": "请只回复 OK"}],
+        }
+    )
+    response = asyncio.run(app_module.chat_completions(request))
+
+    assert response.status_code == 200
+    debug_log = next(item for item in log_messages if item.startswith('debug_request route=/v1/chat/completions payload='))
+    assert json.loads(debug_log.split('payload=', 1)[1]) == {
+        "model": "GLM-5",
+        "messages": [{"role": "user", "content": "请只回复 OK"}],
+        "stream": False,
+    }

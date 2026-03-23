@@ -695,6 +695,7 @@ function renderRuntimeSettings(payload) {
     const llmapiConfigured = Boolean(settings.llmapi_api_key);
     const defaultStreamOpenAI = resolveRuntimeStreamSetting(settings, 'default_stream_openai');
     const defaultStreamAnthropic = resolveRuntimeStreamSetting(settings, 'default_stream_anthropic');
+    const debugLoggingEnabled = Boolean(settings.debug_logging_enabled);
 
     state.runtimeSettings = settings;
     $('settings-proxy-url').value = settings.proxy_url || '';
@@ -702,10 +703,11 @@ function renderRuntimeSettings(payload) {
     $('settings-account-pool-max-concurrency').value = String(settings.account_pool_max_concurrency ?? 4);
     setToggleSwitchState('settings-default-stream-openai', defaultStreamOpenAI);
     setToggleSwitchState('settings-default-stream-anthropic', defaultStreamAnthropic);
+    setToggleSwitchState('settings-debug-logging-enabled', debugLoggingEnabled);
     setText('settings-runtime-path', payload?.path || '--');
     setText(
         'settings-runtime-status',
-        `当前生效并发 ${limit}，运行中 ${active}。OpenAI 默认${defaultStreamOpenAI ? '流式' : '非流式'}，Anthropic 默认${defaultStreamAnthropic ? '流式' : '非流式'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
+        `当前生效并发 ${limit}，运行中 ${active}。OpenAI 默认${defaultStreamOpenAI ? '流式' : '非流式'}，Anthropic 默认${defaultStreamAnthropic ? '流式' : '非流式'}，调试日志已${debugLoggingEnabled ? '开启' : '关闭'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
     );
 
     setText('dashboard-concurrency-limit', String(limit));
@@ -892,6 +894,7 @@ async function saveRuntimeSettings(event) {
     const parsedConcurrency = Number(concurrencyValue || '4');
     const defaultStreamOpenAI = getToggleSwitchState('settings-default-stream-openai');
     const defaultStreamAnthropic = getToggleSwitchState('settings-default-stream-anthropic');
+    const debugLoggingEnabled = getToggleSwitchState('settings-debug-logging-enabled');
 
     if (!Number.isInteger(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 512) {
         showToast('账号池总限制并发数必须是 1 到 512 的整数', 'warning');
@@ -908,6 +911,7 @@ async function saveRuntimeSettings(event) {
                 account_pool_max_concurrency: parsedConcurrency,
                 default_stream_openai: defaultStreamOpenAI,
                 default_stream_anthropic: defaultStreamAnthropic,
+                debug_logging_enabled: debugLoggingEnabled,
             }),
         });
         renderRuntimeSettings(result);
@@ -1112,6 +1116,7 @@ function bindEvents() {
     $('logs-lines-select').addEventListener('change', () => loadLogs().catch((error) => showToast(error.message, 'error')));
     bindToggleSwitch('settings-default-stream-openai');
     bindToggleSwitch('settings-default-stream-anthropic');
+    bindToggleSwitch('settings-debug-logging-enabled');
     $('start-login-btn').addEventListener('click', startBrowserLogin);
     $('open-auth-url-btn').addEventListener('click', openAuthUrl);
     $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);

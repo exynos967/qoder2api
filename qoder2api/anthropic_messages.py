@@ -737,7 +737,6 @@ class AnthropicStreamTranslator:
                                 "type": "tool_use",
                                 "id": state.tool_id,
                                 "name": state.tool_name,
-                                "input": {},
                             },
                         },
                     )
@@ -813,7 +812,6 @@ class AnthropicStreamTranslator:
                             "type": "tool_use",
                             "id": state.tool_id,
                             "name": state.tool_name,
-                            "input": {},
                         },
                     },
                 )

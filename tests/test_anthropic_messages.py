@@ -27,10 +27,12 @@ class _FakeRuntimeSettingsManager:
         *,
         default_stream_openai: bool = True,
         default_stream_anthropic: bool = False,
+        debug_logging_enabled: bool = False,
     ) -> None:
         self._snapshot = RuntimeSettingsSnapshot(
             default_stream_openai=default_stream_openai,
             default_stream_anthropic=default_stream_anthropic,
+            debug_logging_enabled=debug_logging_enabled,
         )
 
     def load(self) -> RuntimeSettingsSnapshot:
@@ -409,7 +411,6 @@ def test_anthropic_stream_translator_emits_tool_use_events() -> None:
         "type": "tool_use",
         "id": "call_1",
         "name": "get_weather",
-        "input": {},
     }
     assert pairs[2][1]["delta"] == {
         "type": "input_json_delta",
@@ -539,3 +540,53 @@ def test_anthropic_messages_stream_emits_thinking_events(monkeypatch) -> None:
     assert pairs[3][1]["delta"] == {"type": "signature_delta", "signature": "sig_123"}
     assert pairs[5][1]["content_block"] == {"type": "text", "text": ""}
     assert pairs[6][1]["delta"] == {"type": "text_delta", "text": "答案"}
+
+
+def test_anthropic_messages_does_not_log_payload_when_debug_logging_disabled(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicTextInvoker()
+    log_messages: list[str] = []
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(debug_logging_enabled=False))
+    monkeypatch.setattr(app_module.logger, "info", lambda message, *args: log_messages.append(message % args if args else message))
+
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
+            "model": "GLM-5",
+            "max_tokens": 64,
+            "stream": False,
+            "messages": [{"role": "user", "content": "你好"}],
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
+
+    assert response.status_code == 200
+    assert not any("debug_request route=/v1/messages" in item for item in log_messages)
+
+
+def test_anthropic_messages_logs_raw_anthropic_payload_when_debug_logging_enabled(monkeypatch) -> None:
+    fake_invoker = _FakeAnthropicTextInvoker()
+    log_messages: list[str] = []
+    monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
+    monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(debug_logging_enabled=True))
+    monkeypatch.setattr(app_module.logger, "info", lambda message, *args: log_messages.append(message % args if args else message))
+
+    request = app_module.AnthropicMessagesRequest.model_validate(
+        {
+            "model": "GLM-5",
+            "max_tokens": 64,
+            "stream": False,
+            "messages": [{"role": "user", "content": "你好"}],
+        }
+    )
+    response = asyncio.run(app_module.anthropic_messages(request))
+
+    assert response.status_code == 200
+    debug_log = next(item for item in log_messages if item.startswith('debug_request route=/v1/messages payload='))
+    assert json.loads(debug_log.split('payload=', 1)[1]) == {
+        "model": "GLM-5",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "你好"}],
+        "stream": False,
+    }

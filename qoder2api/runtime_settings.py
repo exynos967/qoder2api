@@ -31,6 +31,7 @@ class RuntimeSettingsSnapshot(BaseModel):
     account_pool_max_concurrency: int = Field(default=4, ge=1, le=512)
     default_stream_openai: bool = True
     default_stream_anthropic: bool = False
+    debug_logging_enabled: bool = False
 
     model_config = ConfigDict(extra='ignore')
 

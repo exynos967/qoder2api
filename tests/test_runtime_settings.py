@@ -18,6 +18,7 @@ def test_runtime_settings_roundtrip(tmp_path) -> None:
             'account_pool_max_concurrency': 7,
             'default_stream_openai': False,
             'default_stream_anthropic': False,
+            'debug_logging_enabled': True,
         }
     )
     loaded = load_runtime_settings(settings)
@@ -28,6 +29,7 @@ def test_runtime_settings_roundtrip(tmp_path) -> None:
     assert loaded.account_pool_max_concurrency == 7
     assert loaded.default_stream_openai is False
     assert loaded.default_stream_anthropic is False
+    assert loaded.debug_logging_enabled is True
 
 
 def test_runtime_settings_loads_legacy_default_stream(tmp_path) -> None:
@@ -70,6 +72,7 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
     assert payload['settings']['account_pool_max_concurrency'] == 4
     assert payload['settings']['default_stream_openai'] is True
     assert payload['settings']['default_stream_anthropic'] is False
+    assert payload['settings']['debug_logging_enabled'] is False
     assert payload['limiter']['limit'] == 4
 
     updated = asyncio.run(
@@ -80,6 +83,7 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
                 account_pool_max_concurrency=9,
                 default_stream_openai=False,
                 default_stream_anthropic=False,
+                debug_logging_enabled=True,
             )
         )
     )
@@ -90,3 +94,4 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
     assert updated['limiter']['limit'] == 9
     assert updated['settings']['default_stream_openai'] is False
     assert updated['settings']['default_stream_anthropic'] is False
+    assert updated['settings']['debug_logging_enabled'] is True

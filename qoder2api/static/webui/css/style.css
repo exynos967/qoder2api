@@ -214,7 +214,7 @@ body {
   gap: 24px;
 }
 .models-grid, .logs-grid { grid-template-columns: 2fr 1fr; }
-.playground-grid { grid-template-columns: 1fr 1fr; }
+.playground-grid { grid-template-columns: 5fr 7fr; }
 .stack-grid { grid-template-columns: 1fr; }
 @media (max-width: 1024px) {
   .surface-grid { grid-template-columns: 1fr; }
@@ -884,6 +884,16 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
 }
 .terminal-shell .log-container {
   padding-top: 36px;
+}
+.playground-response-card .terminal-shell::before {
+  display: none;
+}
+.playground-response-card .log-container {
+  padding-top: 16px;
+}
+.playground-layout .surface-main,
+.playground-layout .surface-side {
+  min-width: 0;
 }
 
 .surface-main, .surface-side, .full-width {

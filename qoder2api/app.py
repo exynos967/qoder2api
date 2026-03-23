@@ -218,6 +218,17 @@ def _resolve_anthropic_request_stream_mode(stream: bool | None) -> bool:
     return get_runtime_settings_manager().load().default_stream_anthropic
 
 
+def _log_debug_request(route: str, payload: dict[str, Any]) -> None:
+    snapshot = get_runtime_settings_manager().load()
+    if not snapshot.debug_logging_enabled:
+        return
+    logger.info(
+        "debug_request route=%s payload=%s",
+        route,
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
 app = FastAPI(
     title="qoder2api",
     description="独立 Qoder OpenAI 兼容代理。",
@@ -893,6 +904,7 @@ async def _start_streaming_completion(
 
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(request: ChatCompletionRequest):
+    _log_debug_request("/v1/chat/completions", request.model_dump(exclude_none=True))
     prompt = render_openai_messages(request.messages, request.response_format)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
@@ -1038,6 +1050,7 @@ async def chat_completions(request: ChatCompletionRequest):
 
 @app.post("/v1/messages", response_model=None)
 async def anthropic_messages(request: AnthropicMessagesRequest):
+    _log_debug_request("/v1/messages", request.model_dump(exclude_none=True))
     chat_request = convert_anthropic_request_to_chat_request(request)
     prompt = render_openai_messages(chat_request.messages)
     message_id = f"msg_{uuid.uuid4().hex}"
