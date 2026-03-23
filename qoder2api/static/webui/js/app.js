@@ -68,6 +68,47 @@ function setDataState(id, stateValue) {
     }
 }
 
+function resolveRuntimeStreamSetting(settings, key) {
+    if (typeof settings?.[key] === 'boolean') {
+        return settings[key];
+    }
+    return settings?.default_stream !== false;
+}
+
+function setToggleSwitchState(id, enabled) {
+    const element = $(id);
+    if (!element) {
+        return;
+    }
+    const isEnabled = Boolean(enabled);
+    element.dataset.enabled = isEnabled ? '1' : '0';
+    element.setAttribute('aria-checked', isEnabled ? 'true' : 'false');
+    const stateLabel = element.querySelector('.switch-toggle-state');
+    if (stateLabel) {
+        stateLabel.textContent = isEnabled ? '已开启' : '已关闭';
+    }
+}
+
+function getToggleSwitchState(id) {
+    return $(id)?.dataset.enabled === '1';
+}
+
+function bindToggleSwitch(id) {
+    const element = $(id);
+    if (!element) {
+        return;
+    }
+    const toggle = () => setToggleSwitchState(id, !getToggleSwitchState(id));
+    element.addEventListener('click', toggle);
+    element.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+        event.preventDefault();
+        toggle();
+    });
+}
+
 function escapeHtml(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -652,16 +693,19 @@ function renderRuntimeSettings(payload) {
     const active = payload?.limiter?.active ?? 0;
     const proxyConfigured = Boolean(settings.proxy_url);
     const llmapiConfigured = Boolean(settings.llmapi_api_key);
+    const defaultStreamOpenAI = resolveRuntimeStreamSetting(settings, 'default_stream_openai');
+    const defaultStreamAnthropic = resolveRuntimeStreamSetting(settings, 'default_stream_anthropic');
 
     state.runtimeSettings = settings;
     $('settings-proxy-url').value = settings.proxy_url || '';
     $('settings-llmapi-api-key').value = settings.llmapi_api_key || '';
     $('settings-account-pool-max-concurrency').value = String(settings.account_pool_max_concurrency ?? 4);
-    $('settings-default-stream').checked = settings.default_stream !== false;
+    setToggleSwitchState('settings-default-stream-openai', defaultStreamOpenAI);
+    setToggleSwitchState('settings-default-stream-anthropic', defaultStreamAnthropic);
     setText('settings-runtime-path', payload?.path || '--');
     setText(
         'settings-runtime-status',
-        `当前生效并发 ${limit}，运行中 ${active}。默认${settings.default_stream !== false ? '流式' : '非流式'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
+        `当前生效并发 ${limit}，运行中 ${active}。OpenAI 默认${defaultStreamOpenAI ? '流式' : '非流式'}，Anthropic 默认${defaultStreamAnthropic ? '流式' : '非流式'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
     );
 
     setText('dashboard-concurrency-limit', String(limit));
@@ -846,7 +890,8 @@ async function saveRuntimeSettings(event) {
     const llmapiApiKey = $('settings-llmapi-api-key').value.trim();
     const concurrencyValue = $('settings-account-pool-max-concurrency').value.trim();
     const parsedConcurrency = Number(concurrencyValue || '4');
-    const defaultStream = $('settings-default-stream').checked;
+    const defaultStreamOpenAI = getToggleSwitchState('settings-default-stream-openai');
+    const defaultStreamAnthropic = getToggleSwitchState('settings-default-stream-anthropic');
 
     if (!Number.isInteger(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 512) {
         showToast('账号池总限制并发数必须是 1 到 512 的整数', 'warning');
@@ -861,7 +906,8 @@ async function saveRuntimeSettings(event) {
                 proxy_url: proxyUrl,
                 llmapi_api_key: llmapiApiKey,
                 account_pool_max_concurrency: parsedConcurrency,
-                default_stream: defaultStream,
+                default_stream_openai: defaultStreamOpenAI,
+                default_stream_anthropic: defaultStreamAnthropic,
             }),
         });
         renderRuntimeSettings(result);
@@ -1064,6 +1110,8 @@ function bindEvents() {
     $('logs-refresh-btn').addEventListener('click', () => loadLogs().catch((error) => showToast(error.message, 'error')));
     $('logs-autoscroll-btn').addEventListener('click', toggleLogsAutoscroll);
     $('logs-lines-select').addEventListener('change', () => loadLogs().catch((error) => showToast(error.message, 'error')));
+    bindToggleSwitch('settings-default-stream-openai');
+    bindToggleSwitch('settings-default-stream-anthropic');
     $('start-login-btn').addEventListener('click', startBrowserLogin);
     $('open-auth-url-btn').addEventListener('click', openAuthUrl);
     $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);

@@ -22,8 +22,16 @@ class _FakeLimiter:
 
 
 class _FakeRuntimeSettingsManager:
-    def __init__(self, *, default_stream: bool = True) -> None:
-        self._snapshot = RuntimeSettingsSnapshot(default_stream=default_stream)
+    def __init__(
+        self,
+        *,
+        default_stream_openai: bool = True,
+        default_stream_anthropic: bool = False,
+    ) -> None:
+        self._snapshot = RuntimeSettingsSnapshot(
+            default_stream_openai=default_stream_openai,
+            default_stream_anthropic=default_stream_anthropic,
+        )
 
     def load(self) -> RuntimeSettingsSnapshot:
         return self._snapshot
@@ -256,11 +264,11 @@ def test_convert_anthropic_request_to_chat_request_supports_tools_and_images() -
     assert chat_request.tool_choice == {"type": "function", "function": {"name": "get_weather"}}
 
 
-def test_anthropic_messages_use_runtime_default_stream_when_omitted(monkeypatch) -> None:
+def test_anthropic_messages_uses_runtime_default_stream_when_omitted(monkeypatch) -> None:
     fake_invoker = _FakeAnthropicTextInvoker()
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
     monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
-    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(default_stream=True))
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(default_stream_anthropic=True))
 
     request = app_module.AnthropicMessagesRequest.model_validate(
         {

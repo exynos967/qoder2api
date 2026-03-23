@@ -17,8 +17,16 @@ class _FakeLimiter:
 
 
 class _FakeRuntimeSettingsManager:
-    def __init__(self, *, default_stream: bool = True) -> None:
-        self._snapshot = RuntimeSettingsSnapshot(default_stream=default_stream)
+    def __init__(
+        self,
+        *,
+        default_stream_openai: bool = True,
+        default_stream_anthropic: bool = False,
+    ) -> None:
+        self._snapshot = RuntimeSettingsSnapshot(
+            default_stream_openai=default_stream_openai,
+            default_stream_anthropic=default_stream_anthropic,
+        )
 
     def load(self) -> RuntimeSettingsSnapshot:
         return self._snapshot
@@ -110,7 +118,7 @@ def test_chat_completions_uses_runtime_default_stream_when_omitted(monkeypatch) 
     fake_invoker = _FakeStreamingTextInvoker()
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
     monkeypatch.setattr(app_module, "get_invocation_limiter", lambda: _FakeLimiter())
-    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(default_stream=True))
+    monkeypatch.setattr(app_module, "get_runtime_settings_manager", lambda: _FakeRuntimeSettingsManager(default_stream_openai=True))
 
     request = app_module.ChatCompletionRequest.model_validate(
         {

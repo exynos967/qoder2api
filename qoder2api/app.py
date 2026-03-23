@@ -206,10 +206,16 @@ def get_invocation_limiter() -> AdjustableConcurrencyLimiter:
     return _get_runtime_services()[1]
 
 
-def _resolve_request_stream_mode(stream: bool | None) -> bool:
+def _resolve_openai_request_stream_mode(stream: bool | None) -> bool:
     if stream is not None:
         return stream
-    return get_runtime_settings_manager().load().default_stream
+    return get_runtime_settings_manager().load().default_stream_openai
+
+
+def _resolve_anthropic_request_stream_mode(stream: bool | None) -> bool:
+    if stream is not None:
+        return stream
+    return get_runtime_settings_manager().load().default_stream_anthropic
 
 
 app = FastAPI(
@@ -890,7 +896,7 @@ async def chat_completions(request: ChatCompletionRequest):
     prompt = render_openai_messages(request.messages, request.response_format)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
-    stream_mode = _resolve_request_stream_mode(request.stream)
+    stream_mode = _resolve_openai_request_stream_mode(request.stream)
 
     if not stream_mode:
         output_text, reasoning_content, _, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
@@ -1036,7 +1042,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
     prompt = render_openai_messages(chat_request.messages)
     message_id = f"msg_{uuid.uuid4().hex}"
     input_tokens = _estimate_tokens(prompt.prompt)
-    stream_mode = _resolve_request_stream_mode(request.stream)
+    stream_mode = _resolve_anthropic_request_stream_mode(request.stream)
 
     if not stream_mode:
         output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(

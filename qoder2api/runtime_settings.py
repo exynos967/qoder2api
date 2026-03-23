@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .settings import Settings
 
@@ -29,9 +29,24 @@ class RuntimeSettingsSnapshot(BaseModel):
     proxy_url: str = ''
     llmapi_api_key: str = ''
     account_pool_max_concurrency: int = Field(default=4, ge=1, le=512)
-    default_stream: bool = True
+    default_stream_openai: bool = True
+    default_stream_anthropic: bool = False
 
     model_config = ConfigDict(extra='ignore')
+
+    @model_validator(mode='before')
+    @classmethod
+    def _upgrade_legacy_default_stream(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+
+        payload = dict(value)
+        legacy = payload.get('default_stream')
+        if legacy is None:
+            return payload
+        payload.setdefault('default_stream_openai', bool(legacy))
+        payload.setdefault('default_stream_anthropic', False)
+        return payload
 
 
 def get_runtime_settings_path(settings: Settings) -> Path:
