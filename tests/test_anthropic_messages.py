@@ -116,12 +116,16 @@ class _FakeAnthropicStopInvoker:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    async def run_text(self, **kwargs):
-        self.calls.append(kwargs)
-        return "你好<END>世界", "GLM-5"
+    async def run_text(self, **kwargs):  # pragma: no cover - non-stream route now uses stream_events
+        raise AssertionError("run_text should not be used in non-stream stop test")
 
-    async def stream_events(self, **kwargs):  # pragma: no cover - non-stream only
-        raise AssertionError("stream_events should not be used in non-stream stop test")
+    async def stream_events(self, **kwargs):
+        self.calls.append(kwargs)
+
+        async def _iterator():
+            yield ParsedStreamEvent(text_delta="你好<END>世界", finish_reason="stop")
+
+        return _iterator(), "GLM-5"
 
 
 class _FakeAnthropicStopStreamInvoker:

@@ -235,3 +235,37 @@ def test_run_text_rejects_attachments_for_non_vl_model(tmp_path: Path) -> None:
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_type == 'invalid_request_error'
     assert '不支持图片输入' in str(exc_info.value)
+
+
+def test_stream_events_keeps_reasoning_deltas(tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    invoker = QoderCLIInvoker(settings)
+
+    async def fake_stream_chat(*, qoder_home, prompt, attachments, messages, model_info, max_tokens, tools, tool_choice):
+        yield ParsedStreamEvent(reasoning_delta="先分析")
+        yield ParsedStreamEvent(reasoning_signature_delta="sig_1")
+        yield ParsedStreamEvent(text_delta="答案", finish_reason="stop")
+
+    invoker.api_client.stream_chat = fake_stream_chat  # type: ignore[method-assign]
+
+    async def collect() -> list[tuple[str, str, str, str | None]]:
+        iterator, _ = await invoker.stream_events(
+            prompt="hello",
+            attachments=[],
+            messages=[{"role": "user", "content": "hello"}],
+            model="auto",
+            max_tokens=64,
+        )
+        items = []
+        async for event in iterator:
+            items.append((event.text_delta, event.reasoning_delta, event.reasoning_signature_delta, event.finish_reason))
+        return items
+
+    items = asyncio.run(collect())
+
+    assert items == [
+        ("", "先分析", "", None),
+        ("", "", "sig_1", None),
+        ("答案", "", "", "stop"),
+    ]

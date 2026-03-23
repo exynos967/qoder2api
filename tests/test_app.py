@@ -224,16 +224,6 @@ def test_chat_completions_non_stream_returns_reasoning_content(monkeypatch) -> N
             "model": "Ultimate",
             "stream": False,
             "messages": [{"role": "user", "content": "请先思考再回答"}],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "noop",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }
-            ],
-            "tool_choice": "none",
         }
     )
     response = asyncio.run(app_module.chat_completions(request))
@@ -254,16 +244,6 @@ def test_chat_completions_stream_emits_reasoning_content(monkeypatch) -> None:
             "model": "Ultimate",
             "stream": True,
             "messages": [{"role": "user", "content": "请先思考再回答"}],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "noop",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }
-            ],
-            "tool_choice": "none",
         }
     )
     response = asyncio.run(app_module.chat_completions(request))

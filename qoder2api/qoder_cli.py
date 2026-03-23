@@ -192,7 +192,13 @@ class QoderCLIInvoker:
                     tools=tools,
                     tool_choice=tool_choice,
                 ):
-                    if event.text_delta or event.tool_call_deltas or event.finish_reason:
+                    if (
+                        event.text_delta
+                        or event.reasoning_delta
+                        or event.reasoning_signature_delta
+                        or event.tool_call_deltas
+                        or event.finish_reason
+                    ):
                         yield event
             except QoderAPIError as exc:
                 raise QoderCLIError(

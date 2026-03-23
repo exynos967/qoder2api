@@ -854,27 +854,17 @@ async def _run_non_stream_completion(
 ) -> tuple[str, str, str, str, list[dict[str, Any]], str]:
     invoker = get_invoker()
     async with get_invocation_limiter().slot():
-        if request.tools:
-            iterator, resolved_model = await invoker.stream_events(
-                prompt=prompt.prompt,
-                attachments=prompt.attachments,
-                messages=prompt.messages,
-                model=request.model,
-                max_tokens=request.max_tokens,
-                tools=request.tools,
-                tool_choice=request.tool_choice,
-            )
-            output_text, reasoning_content, reasoning_signature, tool_calls, finish_reason = await _collect_stream_result(iterator)
-            return output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason
-
-        output_text, resolved_model = await invoker.run_text(
+        iterator, resolved_model = await invoker.stream_events(
             prompt=prompt.prompt,
             attachments=prompt.attachments,
             messages=prompt.messages,
             model=request.model,
             max_tokens=request.max_tokens,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
         )
-        return output_text, "", "", resolved_model, [], "stop"
+        output_text, reasoning_content, reasoning_signature, tool_calls, finish_reason = await _collect_stream_result(iterator)
+        return output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason
 
 
 async def _start_streaming_completion(
