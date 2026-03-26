@@ -370,6 +370,47 @@ def test_build_anthropic_message_response_sanitizes_tool_input_for_schema() -> N
     ]
 
 
+def test_build_anthropic_message_response_maps_string_to_single_required_field() -> None:
+    payload = build_anthropic_message_response(
+        message_id="msg_test",
+        model="claude-opus-4-6",
+        output_text="",
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "Bash",
+                    "arguments": '"pwd"',
+                },
+            }
+        ],
+        finish_reason="tool_calls",
+        input_tokens=10,
+        output_tokens=10,
+        tool_schemas={
+            "Bash": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "description": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["command"],
+            }
+        },
+    )
+
+    assert payload["content"] == [
+        {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "Bash",
+            "input": {"command": "pwd"},
+        }
+    ]
+
+
 def test_anthropic_messages_stream_emits_named_events(monkeypatch) -> None:
     fake_invoker = _FakeAnthropicTextInvoker()
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
@@ -506,6 +547,57 @@ def test_anthropic_stream_translator_sanitizes_tool_use_input_for_schema() -> No
     ]
 
     assert tool_deltas == ['{"city":"北京"}']
+
+
+def test_anthropic_stream_translator_maps_string_to_single_required_field() -> None:
+    translator = AnthropicStreamTranslator(
+        message_id="msg_test",
+        prompt_text="请调用工具",
+        tool_schemas={
+            "Bash": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "description": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["command"],
+            }
+        },
+    )
+    payloads: list[str] = []
+    payloads.extend(translator.start(model="claude-opus-4-6"))
+    payloads.extend(
+        translator.feed(
+            ParsedStreamEvent(
+                tool_call_deltas=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "Bash"},
+                    },
+                    {
+                        "index": 0,
+                        "type": "function",
+                        "function": {"arguments": '"pwd"'},
+                    },
+                ],
+                finish_reason="tool_calls",
+            )
+        )
+    )
+    payloads.extend(translator.finish())
+
+    lines = [line for line in "".join(payloads).splitlines() if line]
+    pairs = _extract_sse_pairs(lines)
+    tool_deltas = [
+        payload["delta"]["partial_json"]
+        for event, payload in pairs
+        if event == "content_block_delta" and payload.get("delta", {}).get("type") == "input_json_delta"
+    ]
+
+    assert tool_deltas == ['{"command":"pwd"}']
 
 
 def test_anthropic_messages_non_stream_applies_stop_sequences(monkeypatch) -> None:

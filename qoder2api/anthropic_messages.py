@@ -425,20 +425,40 @@ def _coerce_tool_value(value: Any, schema: dict[str, Any]) -> Any:
     return value
 
 
+def _get_single_required_field_name(schema: dict[str, Any], schema_properties: dict[str, Any]) -> str | None:
+    required_fields = schema.get("required")
+    if not isinstance(required_fields, list):
+        return None
+
+    normalized_required = [
+        str(field_name).strip()
+        for field_name in required_fields
+        if isinstance(field_name, str) and str(field_name).strip() in schema_properties
+    ]
+    if len(normalized_required) == 1:
+        return normalized_required[0]
+    return None
+
+
+
 def _coerce_tool_object(value: Any, schema: dict[str, Any]) -> dict[str, Any]:
     if isinstance(value, str):
         value = _parse_tool_arguments(value)
 
     properties = schema.get("properties")
     schema_properties = properties if isinstance(properties, dict) else {}
+    required_field_name = _get_single_required_field_name(schema, schema_properties)
 
     if not isinstance(value, dict):
-        if len(schema_properties) == 1:
-            field_name, field_schema = next(iter(schema_properties.items()))
+        candidate_field_name = required_field_name
+        if candidate_field_name is None and len(schema_properties) == 1:
+            candidate_field_name = next(iter(schema_properties))
+        if candidate_field_name is not None:
+            field_schema = schema_properties.get(candidate_field_name)
             if isinstance(field_schema, dict):
                 coerced = _coerce_tool_value(value, field_schema)
                 if coerced is not _SCHEMA_MISSING:
-                    return {field_name: coerced}
+                    return {candidate_field_name: coerced}
         return {}
 
     if not schema_properties:
