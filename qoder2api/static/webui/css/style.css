@@ -924,3 +924,73 @@ textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+.tone-danger { background-color: var(--c-error-50); color: var(--c-error-700); border-color: var(--c-error-200); }
+
+.section-tag-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  color: var(--c-gray-900);
+}
+
+.accounts-stack {
+  gap: 24px;
+}
+
+.registration-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+  gap: 24px;
+}
+
+.registration-main,
+.registration-side {
+  min-width: 0;
+}
+
+.registration-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.registration-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.registration-session-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--c-gray-200);
+  border-radius: var(--radius-lg);
+  background-color: var(--c-gray-50);
+}
+
+.registration-terminal-shell {
+  min-height: 220px;
+}
+
+.registration-terminal {
+  min-height: 220px;
+}
+
+.registration-terminal pre {
+  min-height: 160px;
+}
+
+@media (max-width: 1024px) {
+  .registration-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .registration-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -232,44 +232,129 @@
                 </section>
 
                 <section id="accounts-section" class="section">
-                    <div class="card full-width">
-                        <div class="card-header">
-                            <div>
-                                <span>账号池</span>
-                                <p class="section-intro">管理登录账号，查看状态，并执行启用、测试、改名和删除操作。</p>
+                    <div class="surface-grid stack-grid accounts-stack">
+                        <div class="card full-width registration-card">
+                            <div class="card-header">
+                                <div>
+                                    <div class="section-tag-row">
+                                        <span class="table-badge tone-success">注册</span>
+                                        <span>自动注册与 OAuth 入池</span>
+                                    </div>
+                                    <p class="section-intro">在账号池上方统一管理自动注册、手动 Oauth 登录和相关参数，保持和当前控制台一致的操作流。</p>
+                                </div>
+                                <div class="header-actions">
+                                    <button id="start-registration-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span><span>自动注册并入池</span></button>
+                                    <button id="cancel-registration-btn" class="btn btn-secondary btn-sm" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span><span>取消注册</span></button>
+                                    <button id="start-login-btn" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>手动 Oauth 登录</span></button>
+                                </div>
                             </div>
-                            <div class="header-actions">
-                                <button id="start-login-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>Oauth 登录</span></button>
-                                <button id="accounts-refresh-status-btn" class="btn btn-secondary btn-sm" title="依次向 Qoder 刷新全部已登录账号的套餐、额度与登录状态"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>一键刷新状态</span></button>
-                                <button id="accounts-refresh-btn" class="btn btn-secondary btn-sm" title="重新加载当前账号池数据"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>重新加载</span></button>
+                            <div class="card-body">
+                                <div class="registration-grid">
+                                    <div class="registration-main">
+                                        <form id="registration-settings-form">
+                                            <div class="form-row responsive-row registration-settings-row">
+                                                <div class="form-group form-group-sm">
+                                                    <label for="registration-count">本轮注册数量</label>
+                                                    <input type="number" id="registration-count" min="1" max="20" placeholder="1">
+                                                </div>
+                                                <div class="form-group form-group-sm">
+                                                    <label for="registration-browser-mode">浏览器模式</label>
+                                                    <select id="registration-browser-mode">
+                                                        <option value="headless">headless</option>
+                                                        <option value="headed">headed</option>
+                                                        <option value="virtual">virtual</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="registration-proxy-url">注册代理</label>
+                                                <input type="text" id="registration-proxy-url" placeholder="留空则回退到全局代理设置">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="registration-mail-api-base">临时邮箱 API Base</label>
+                                                <input type="text" id="registration-mail-api-base" placeholder="https://maliapi.215.im/v1">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="registration-mail-api-key">临时邮箱 API Key</label>
+                                                <input type="password" id="registration-mail-api-key" placeholder="用于注册时拉取验证码邮件">
+                                            </div>
+                                            <p id="registration-runtime-status" class="hint">加载中...</p>
+                                            <div class="actions-bar compact-actions">
+                                                <button type="submit" id="registration-save-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></span><span>保存注册设置</span></button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                    <div class="registration-side">
+                                        <div class="registration-meta-grid">
+                                            <article class="status-item">
+                                                <span class="status-label">工具状态</span>
+                                                <strong id="registration-availability-text">--</strong>
+                                            </article>
+                                            <article class="status-item">
+                                                <span class="status-label">当前任务</span>
+                                                <strong id="registration-session-status">空闲</strong>
+                                            </article>
+                                            <article class="status-item">
+                                                <span class="status-label">当前邮箱</span>
+                                                <strong id="registration-current-email">--</strong>
+                                            </article>
+                                            <article class="status-item">
+                                                <span class="status-label">任务进度</span>
+                                                <strong id="registration-session-counts">0 / 0</strong>
+                                            </article>
+                                        </div>
+                                        <div class="registration-session-note">
+                                            <span id="registration-availability-badge" class="table-badge tone-muted">检查中</span>
+                                            <span id="registration-session-badge" class="table-badge tone-muted">空闲</span>
+                                            <span id="registration-session-meta" class="hint">尚未启动自动注册流程。</span>
+                                        </div>
+                                        <div class="control-cluster">
+                                            <div class="form-group control-cluster-main">
+                                                <label for="auth-url">Oauth链接</label>
+                                                <input type="text" id="auth-url" readonly placeholder="手动登录或自动入池进行中时会显示">
+                                            </div>
+                                            <div class="control-cluster-actions">
+                                                <button id="open-auth-url-btn" class="btn btn-secondary" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>打开登录页</span></button>
+                                                <button id="copy-auth-url-btn" class="btn btn-secondary" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span><span>复制链接</span></button>
+                                            </div>
+                                        </div>
+                                        <div class="terminal-shell registration-terminal-shell">
+                                            <div class="log-container terminal-container registration-terminal" data-terminal-label="register.oauth">
+                                                <pre id="registration-terminal-output">尚未启动自动注册流程。</pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div class="card-body">
-                            <div class="control-cluster">
-                                <div class="form-group control-cluster-main">
-                                    <label for="auth-url">Oauth链接</label>
-                                    <input type="text" id="auth-url" readonly placeholder="启动登录后手动打开">
+
+                        <div class="card full-width">
+                            <div class="card-header">
+                                <div>
+                                    <span>账号池</span>
+                                    <p class="section-intro">管理登录账号，查看状态，并执行启用、测试、改名和删除操作。</p>
                                 </div>
-                                <div class="control-cluster-actions">
-                                    <button id="open-auth-url-btn" class="btn btn-secondary" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg></span><span>打开登录页</span></button>
-                                    <button id="copy-auth-url-btn" class="btn btn-secondary" disabled><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span><span>复制链接</span></button>
+                                <div class="header-actions">
+                                    <button id="accounts-refresh-status-btn" class="btn btn-secondary btn-sm" title="依次向 Qoder 刷新全部已登录账号的套餐、额度与登录状态"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>一键刷新状态</span></button>
+                                    <button id="accounts-refresh-btn" class="btn btn-secondary btn-sm" title="重新加载当前账号池数据"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></span><span>重新加载</span></button>
                                 </div>
                             </div>
-
-                            <div class="table-wrap">
-                                <table class="data-table account-table" id="accounts-table">
-                                    <thead>
-                                        <tr>
-                                            <th>账号</th>
-                                            <th>状态</th>
-                                            <th>能力</th>
-                                            <th>操作</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr><td colspan="4">加载中...</td></tr>
-                                    </tbody>
-                                </table>
+                            <div class="card-body">
+                                <div class="table-wrap">
+                                    <table class="data-table account-table" id="accounts-table">
+                                        <thead>
+                                            <tr>
+                                                <th>账号</th>
+                                                <th>状态</th>
+                                                <th>能力</th>
+                                                <th>操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr><td colspan="4">加载中...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
                     </div>

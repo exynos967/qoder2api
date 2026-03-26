@@ -75,6 +75,11 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     default_stream_openai: bool = True
     default_stream_anthropic: bool = False
     debug_logging_enabled: bool = False
+    registration_count: int = Field(default=1, ge=1, le=20)
+    registration_browser_mode: Literal["headed", "headless", "virtual"] = "headless"
+    registration_proxy_url: str = ""
+    registration_mail_api_base: str = "https://maliapi.215.im/v1"
+    registration_mail_api_key: str = ""
     default_stream: bool | None = Field(default=None, exclude=True)
 
     model_config = ConfigDict(extra="forbid")
@@ -92,3 +97,30 @@ class RuntimeSettingsUpdateRequest(BaseModel):
         payload.setdefault('default_stream_openai', bool(legacy))
         payload.setdefault('default_stream_anthropic', False)
         return payload
+
+
+class RegistrationWorkerProgressRequest(BaseModel):
+    """外部注册 Worker 上报进度。"""
+
+    line: str = ""
+    status: str | None = None
+    current_email: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RegistrationWorkerCompleteRequest(BaseModel):
+    """外部注册 Worker 上报单个账号已完成 OAuth。"""
+
+    email: str
+    password: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RegistrationWorkerFailRequest(BaseModel):
+    """外部注册 Worker 上报失败。"""
+
+    message: str
+
+    model_config = ConfigDict(extra="forbid")

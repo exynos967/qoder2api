@@ -19,6 +19,11 @@ def test_runtime_settings_roundtrip(tmp_path) -> None:
             'default_stream_openai': False,
             'default_stream_anthropic': False,
             'debug_logging_enabled': True,
+            'registration_count': 3,
+            'registration_browser_mode': 'virtual',
+            'registration_proxy_url': 'http://127.0.0.1:7891',
+            'registration_mail_api_base': 'https://mail.example/v1',
+            'registration_mail_api_key': 'mail-demo',
         }
     )
     loaded = load_runtime_settings(settings)
@@ -30,6 +35,11 @@ def test_runtime_settings_roundtrip(tmp_path) -> None:
     assert loaded.default_stream_openai is False
     assert loaded.default_stream_anthropic is False
     assert loaded.debug_logging_enabled is True
+    assert loaded.registration_count == 3
+    assert loaded.registration_browser_mode == 'virtual'
+    assert loaded.registration_proxy_url == 'http://127.0.0.1:7891'
+    assert loaded.registration_mail_api_base == 'https://mail.example/v1'
+    assert loaded.registration_mail_api_key == 'mail-demo'
 
 
 def test_runtime_settings_loads_legacy_default_stream(tmp_path) -> None:
@@ -73,6 +83,11 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
     assert payload['settings']['default_stream_openai'] is True
     assert payload['settings']['default_stream_anthropic'] is False
     assert payload['settings']['debug_logging_enabled'] is False
+    assert payload['settings']['registration_count'] == 1
+    assert payload['settings']['registration_browser_mode'] == 'headless'
+    assert payload['settings']['registration_proxy_url'] == ''
+    assert payload['settings']['registration_mail_api_base'] == 'https://maliapi.215.im/v1'
+    assert payload['settings']['registration_mail_api_key'] == ''
     assert payload['limiter']['limit'] == 4
 
     updated = asyncio.run(
@@ -84,6 +99,11 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
                 default_stream_openai=False,
                 default_stream_anthropic=False,
                 debug_logging_enabled=True,
+                registration_count=2,
+                registration_browser_mode='virtual',
+                registration_proxy_url='http://127.0.0.1:7891',
+                registration_mail_api_base='https://mail.example/v1',
+                registration_mail_api_key='mail-demo',
             )
         )
     )
@@ -95,3 +115,8 @@ def test_webui_runtime_settings_routes(monkeypatch, tmp_path) -> None:
     assert updated['settings']['default_stream_openai'] is False
     assert updated['settings']['default_stream_anthropic'] is False
     assert updated['settings']['debug_logging_enabled'] is True
+    assert updated['settings']['registration_count'] == 2
+    assert updated['settings']['registration_browser_mode'] == 'virtual'
+    assert updated['settings']['registration_proxy_url'] == 'http://127.0.0.1:7891'
+    assert updated['settings']['registration_mail_api_base'] == 'https://mail.example/v1'
+    assert updated['settings']['registration_mail_api_key'] == 'mail-demo'

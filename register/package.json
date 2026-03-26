@@ -1,0 +1,28 @@
+{
+  "name": "qoder2api-register",
+  "version": "1.0.0",
+  "description": "qoder2api 专用的注册与 OAuth worker。",
+  "main": "register.ts",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "register": "tsx register.ts",
+    "typecheck": "tsc --noEmit",
+    "fetch:camoufox": "camoufox-js fetch",
+    "oauth": "tsx login.ts",
+    "login": "tsx login.ts",
+    "worker": "tsx worker.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "camoufox-js": "^0.9.2",
+    "playwright": "^1.58.2",
+    "playwright-core": "^1.58.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

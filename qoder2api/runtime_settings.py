@@ -32,6 +32,11 @@ class RuntimeSettingsSnapshot(BaseModel):
     default_stream_openai: bool = True
     default_stream_anthropic: bool = False
     debug_logging_enabled: bool = False
+    registration_count: int = Field(default=1, ge=1, le=20)
+    registration_browser_mode: str = 'headless'
+    registration_proxy_url: str = ''
+    registration_mail_api_base: str = 'https://maliapi.215.im/v1'
+    registration_mail_api_key: str = ''
 
     model_config = ConfigDict(extra='ignore')
 

@@ -5,6 +5,7 @@ const MODELS_API = '/v1/models';
 const SETTINGS_API = '/webui/api/settings';
 const COMPLETIONS_API = '/v1/chat/completions';
 const AUTH_START_API = '/auth/browser/start';
+const REGISTRATION_API = '/webui/api/registration';
 
 const PAGE_META = {
     dashboard: {
@@ -35,6 +36,11 @@ const state = {
     sessionDone: true,
     sessionPollTimer: null,
     authUrl: '',
+    registrationSessionId: null,
+    registrationSessionDone: true,
+    registrationSessionPollTimer: null,
+    registrationAuthUrl: '',
+    registration: null,
     popup: null,
     models: [],
     accounts: [],
@@ -186,14 +192,53 @@ function updatePageMeta(page) {
 }
 
 function syncAuthUrlInput() {
-    $('auth-url').value = state.authUrl || '';
-    $('open-auth-url-btn').disabled = !state.authUrl;
-    $('copy-auth-url-btn').disabled = !state.authUrl;
+    const currentAuthUrl = state.registrationAuthUrl || state.authUrl || '';
+    $('auth-url').value = currentAuthUrl;
+    $('open-auth-url-btn').disabled = !currentAuthUrl;
+    $('copy-auth-url-btn').disabled = !currentAuthUrl;
 }
 
 function clearAuthUrlInput() {
     state.authUrl = '';
     syncAuthUrlInput();
+}
+
+function setBadgeTone(id, text, tone) {
+    const element = $(id);
+    if (!element) {
+        return;
+    }
+    element.className = `table-badge ${tone}`;
+    element.textContent = text;
+}
+
+function resolveRegistrationStatusMeta(status) {
+    switch (String(status || '').toLowerCase()) {
+        case 'success':
+            return { text: '完成', tone: 'tone-success' };
+        case 'ready':
+            return { text: '入池中', tone: 'tone-success' };
+        case 'starting':
+        case 'starting_browser_login':
+        case 'registering':
+        case 'oauth_signing_in':
+            return { text: '进行中', tone: 'tone-warning' };
+        case 'cancelled':
+            return { text: '已取消', tone: 'tone-muted' };
+        case 'error':
+            return { text: '失败', tone: 'tone-danger' };
+        default:
+            return { text: '空闲', tone: 'tone-muted' };
+    }
+}
+
+function updateRegistrationActionState() {
+    const registrationBusy = !state.registrationSessionDone;
+    const browserLoginBusy = !state.sessionDone;
+    const available = Boolean(state.registration?.available);
+    $('start-registration-btn').disabled = !available || registrationBusy || browserLoginBusy;
+    $('cancel-registration-btn').disabled = !registrationBusy;
+    $('start-login-btn').disabled = registrationBusy || browserLoginBusy;
 }
 
 function switchPage(page) {
@@ -208,7 +253,7 @@ function switchPage(page) {
     });
 
     updatePageMeta(page);
-    if (page !== 'accounts' && state.sessionDone) {
+    if (page !== 'accounts' && state.sessionDone && state.registrationSessionDone) {
         clearAuthUrlInput();
     }
 }
@@ -234,6 +279,7 @@ function renderLoginState(session, auth = {}) {
     }
 
     syncAuthUrlInput();
+    updateRegistrationActionState();
 
     if (session) {
         $('login-terminal-output').textContent = session.terminal_output || '等待网页登录状态更新...';
@@ -244,6 +290,39 @@ function renderLoginState(session, auth = {}) {
     }
 
     autoScrollLogsIfNeeded();
+}
+
+function renderRegistration(payload = {}) {
+    const registration = payload || {};
+    const session = registration.session || null;
+    const statusMeta = resolveRegistrationStatusMeta(session?.status);
+    const available = Boolean(registration.available);
+    const availabilityText = available ? '已就绪' : '未就绪';
+    const availabilityBadgeText = available ? '注册 Worker 已就绪' : '注册 Worker 不可用';
+
+    state.registration = registration;
+    state.registrationSessionId = session?.session_id || null;
+    state.registrationSessionDone = !(session && !session.done);
+    state.registrationAuthUrl = session && !session.done ? (session.auth_url || '') : '';
+
+    setText('registration-availability-text', availabilityText);
+    setText('registration-session-status', statusMeta.text);
+    setText('registration-current-email', session?.current_email || '—');
+    setText(
+        'registration-session-counts',
+        session ? `${Number(session.success_count || 0)} / ${Number(session.requested_count || 0)}` : '0 / 0',
+    );
+    setText(
+        'registration-session-meta',
+        session?.message || registration.message || '尚未启动自动注册流程。',
+    );
+    $('registration-terminal-output').textContent = session?.terminal_output || registration.message || '尚未启动自动注册流程。';
+    scrollTerminalToBottom('registration-terminal-output');
+    setBadgeTone('registration-availability-badge', availabilityBadgeText, available ? 'tone-success' : 'tone-warning');
+    setBadgeTone('registration-session-badge', statusMeta.text, statusMeta.tone);
+
+    syncAuthUrlInput();
+    updateRegistrationActionState();
 }
 
 function updateTopbarSummary() {
@@ -401,6 +480,7 @@ function renderOverview(data) {
     const quotaAccounts = Number(quotaSummary.accounts_with_quota || 0);
 
     state.overview = data;
+    renderRegistration(data.registration || state.registration || {});
 
     setText('health-status', String(health.status || '--').toUpperCase());
     setText('health-version', health.version || '--');
@@ -689,6 +769,7 @@ function renderModels(models) {
 
 function renderRuntimeSettings(payload) {
     const settings = payload?.settings || payload || {};
+    const registration = payload?.registration || state.registration || {};
     const limit = payload?.limiter?.limit ?? settings.account_pool_max_concurrency ?? '--';
     const active = payload?.limiter?.active ?? 0;
     const proxyConfigured = Boolean(settings.proxy_url);
@@ -699,6 +780,11 @@ function renderRuntimeSettings(payload) {
 
     state.runtimeSettings = settings;
     $('settings-proxy-url').value = settings.proxy_url || '';
+    $('registration-count').value = String(settings.registration_count ?? 1);
+    $('registration-browser-mode').value = settings.registration_browser_mode || 'headless';
+    $('registration-proxy-url').value = settings.registration_proxy_url || '';
+    $('registration-mail-api-base').value = settings.registration_mail_api_base || 'https://maliapi.215.im/v1';
+    $('registration-mail-api-key').value = settings.registration_mail_api_key || '';
     $('settings-llmapi-api-key').value = settings.llmapi_api_key || '';
     $('settings-account-pool-max-concurrency').value = String(settings.account_pool_max_concurrency ?? 4);
     setToggleSwitchState('settings-default-stream-openai', defaultStreamOpenAI);
@@ -709,6 +795,11 @@ function renderRuntimeSettings(payload) {
         'settings-runtime-status',
         `当前生效并发 ${limit}，运行中 ${active}。OpenAI 默认${defaultStreamOpenAI ? '流式' : '非流式'}，Anthropic 默认${defaultStreamAnthropic ? '流式' : '非流式'}，调试日志已${debugLoggingEnabled ? '开启' : '关闭'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
     );
+    setText(
+        'registration-runtime-status',
+        `${registration.message || '自动注册工具状态正常。'} 当前默认注册 ${settings.registration_count ?? 1} 个账号，浏览器模式 ${settings.registration_browser_mode || 'headless'}，注册代理${settings.registration_proxy_url ? '已配置' : '未配置'}，邮箱 API Key${settings.registration_mail_api_key ? '已配置' : '未配置'}。`,
+    );
+    renderRegistration(registration);
 
     setText('dashboard-concurrency-limit', String(limit));
     setText('dashboard-concurrency-text', `${active} / ${limit}`);
@@ -787,6 +878,13 @@ function stopSessionPolling() {
     }
 }
 
+function stopRegistrationPolling() {
+    if (state.registrationSessionPollTimer) {
+        clearInterval(state.registrationSessionPollTimer);
+        state.registrationSessionPollTimer = null;
+    }
+}
+
 function startSessionPolling() {
     stopSessionPolling();
     if (!state.sessionId || state.sessionDone) {
@@ -807,6 +905,28 @@ function startSessionPolling() {
             showToast(error.message, 'error');
         }
     }, 1200);
+}
+
+function startRegistrationPolling() {
+    stopRegistrationPolling();
+    if (!state.registrationSessionId || state.registrationSessionDone) {
+        return;
+    }
+
+    state.registrationSessionPollTimer = setInterval(async () => {
+        try {
+            const session = await apiRequest(`${REGISTRATION_API}/sessions/${state.registrationSessionId}`);
+            renderRegistration({ ...(state.registration || {}), session });
+            if (session.done) {
+                stopRegistrationPolling();
+                await Promise.all([loadOverview(), loadAccounts(), loadModels(), loadRuntimeSettings()]);
+                showToast(session.message || '自动注册流程已结束', session.status === 'success' ? 'success' : 'info');
+            }
+        } catch (error) {
+            stopRegistrationPolling();
+            showToast(error.message, 'error');
+        }
+    }, 1500);
 }
 
 async function startBrowserLogin() {
@@ -835,12 +955,13 @@ async function startBrowserLogin() {
 }
 
 async function copyAuthUrl() {
-    if (!state.authUrl) {
+    const currentAuthUrl = $('auth-url').value.trim();
+    if (!currentAuthUrl) {
         return;
     }
     try {
         if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            await navigator.clipboard.writeText(state.authUrl);
+            await navigator.clipboard.writeText(currentAuthUrl);
         } else {
             const input = $('auth-url');
             input.removeAttribute('readonly');
@@ -860,10 +981,87 @@ async function copyAuthUrl() {
 }
 
 function openAuthUrl() {
-    if (!state.authUrl) {
+    const currentAuthUrl = $('auth-url').value.trim();
+    if (!currentAuthUrl) {
         return;
     }
-    state.popup = window.open(state.authUrl, 'qoder-browser-login');
+    state.popup = window.open(currentAuthUrl, 'qoder-browser-login');
+}
+
+async function saveRegistrationSettings(event) {
+    event.preventDefault();
+
+    const countValue = $('registration-count').value.trim();
+    const parsedCount = Number(countValue || '1');
+    const browserMode = $('registration-browser-mode').value || 'headless';
+    const proxyUrl = $('registration-proxy-url').value.trim();
+    const mailApiBase = $('registration-mail-api-base').value.trim();
+    const mailApiKey = $('registration-mail-api-key').value.trim();
+
+    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 20) {
+        showToast('本轮注册数量必须是 1 到 20 的整数', 'warning');
+        return;
+    }
+
+    $('registration-save-btn').disabled = true;
+    try {
+        const result = await apiRequest(SETTINGS_API, {
+            method: 'PUT',
+            body: JSON.stringify({
+                registration_count: parsedCount,
+                registration_browser_mode: browserMode,
+                registration_proxy_url: proxyUrl,
+                registration_mail_api_base: mailApiBase,
+                registration_mail_api_key: mailApiKey,
+            }),
+        });
+        renderRuntimeSettings(result);
+        showToast(result.message || '注册设置已保存', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally {
+        $('registration-save-btn').disabled = false;
+    }
+}
+
+async function startRegistration() {
+    $('start-registration-btn').disabled = true;
+    try {
+        const data = await apiRequest(`${REGISTRATION_API}/start`, {
+            method: 'POST',
+            body: '{}',
+        });
+        renderRegistration(data);
+        if (data.session && !data.session.done) {
+            startRegistrationPolling();
+        }
+        showToast(data.message || '自动注册流程已启动', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally {
+        updateRegistrationActionState();
+    }
+}
+
+async function cancelRegistration() {
+    if (!state.registrationSessionId) {
+        return;
+    }
+    $('cancel-registration-btn').disabled = true;
+    try {
+        const data = await apiRequest(`${REGISTRATION_API}/sessions/${state.registrationSessionId}/cancel`, {
+            method: 'POST',
+            body: '{}',
+        });
+        renderRegistration({ ...(state.registration || {}), session: data });
+        stopRegistrationPolling();
+        showToast(data.message || '自动注册流程已取消', 'info');
+        await Promise.all([loadOverview(), loadAccounts(), loadRuntimeSettings()]);
+    } catch (error) {
+        showToast(error.message, 'error');
+    } finally {
+        updateRegistrationActionState();
+    }
 }
 
 async function toggleAccount(accountId, currentEnabled) {
@@ -1101,12 +1299,14 @@ function bindEvents() {
                 await loadLogs();
             }
             if (page === 'accounts') {
-                await loadAccounts();
+                await Promise.all([loadOverview(), loadAccounts(), loadRuntimeSettings()]);
             }
         });
     });
 
     $('dashboard-refresh-btn').addEventListener('click', () => loadOverview().catch((error) => showToast(error.message, 'error')));
+    $('start-registration-btn').addEventListener('click', startRegistration);
+    $('cancel-registration-btn').addEventListener('click', cancelRegistration);
     $('accounts-refresh-status-btn').addEventListener('click', () => refreshAllAccountStatuses().catch((error) => showToast(error.message, 'error')));
     $('accounts-refresh-btn').addEventListener('click', () => Promise.all([loadOverview(), loadAccounts()]).catch((error) => showToast(error.message, 'error')));
     $('models-refresh-btn').addEventListener('click', () => Promise.all([loadModels(), loadRuntimeSettings()]).catch((error) => showToast(error.message, 'error')));
@@ -1118,6 +1318,7 @@ function bindEvents() {
     bindToggleSwitch('settings-default-stream-anthropic');
     bindToggleSwitch('settings-debug-logging-enabled');
     $('start-login-btn').addEventListener('click', startBrowserLogin);
+    $('registration-settings-form').addEventListener('submit', saveRegistrationSettings);
     $('open-auth-url-btn').addEventListener('click', openAuthUrl);
     $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);
     $('playground-form').addEventListener('submit', submitPlayground);
@@ -1135,6 +1336,9 @@ async function init() {
         await Promise.all([loadOverview(), loadAccounts(), loadModels(), loadRuntimeSettings()]);
         if (state.sessionId && !state.sessionDone) {
             startSessionPolling();
+        }
+        if (state.registrationSessionId && !state.registrationSessionDone) {
+            startRegistrationPolling();
         }
     } catch (error) {
         showToast(error.message, 'error');

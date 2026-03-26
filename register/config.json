@@ -1,0 +1,24 @@
+{
+  // qoder2api 后端地址（worker 模式使用）
+  "backendUrl": "http://127.0.0.1:28001",
+  // 启动 worker 后自动向 qoder2api 创建一轮注册任务
+  "autoStart": true,
+  // 轮询间隔（秒）
+  "pollIntervalSeconds": 5,
+  // 自动创建任务时的注册数量
+  "count": 1,
+  // Camoufox 模式：headed / virtual / headless
+  "browserMode": "headless",
+  // 浏览器 locale
+  "locale": "zh-CN",
+  // 浏览器语言列表
+  "languages": ["zh-CN", "zh"],
+  // 代理配置：null / "http://127.0.0.1:7890" / { server, username, password, bypass }
+  "proxy": null,
+  // 临时邮箱 API 基础地址
+  "mailApiBase": "https://maliapi.215.im/v1",
+  // 临时邮箱 API Key（请自行填写）
+  "mailApiKey": "",
+  // 输出文件路径（通常由 qoder2api 运行时覆盖）
+  "outputFile": "accounts.json"
+}

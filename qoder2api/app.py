@@ -41,6 +41,7 @@ from .login import QoderLoginError, QoderLoginManager
 from .prompting import PreparedPrompt, render_openai_messages
 from .qoder_api import QoderAPIClient, QoderAPIError
 from .qoder_cli import QoderCLIError, QoderCLIInvoker
+from .registration import QoderRegistrationError, QoderRegistrationManager
 from .streaming import merge_tool_call_deltas
 from .runtime_settings import RuntimeSettingsManager
 from .schemas import (
@@ -50,6 +51,9 @@ from .schemas import (
     LoginSessionInputRequest,
     RuntimeSettingsUpdateRequest,
     StartBrowserLoginRequest,
+    RegistrationWorkerProgressRequest,
+    RegistrationWorkerCompleteRequest,
+    RegistrationWorkerFailRequest,
 )
 from .settings import Settings
 from . import __version__
@@ -179,6 +183,11 @@ def get_login_manager() -> QoderLoginManager:
 
 
 @lru_cache
+def get_registration_manager() -> QoderRegistrationManager:
+    return QoderRegistrationManager(get_settings(), login_manager=get_login_manager())
+
+
+@lru_cache
 def get_account_pool() -> QoderAccountPool:
     return QoderAccountPool(get_settings())
 
@@ -264,6 +273,16 @@ async def handle_qoder_login_error(request: Request, exc: QoderLoginError) -> JS
 
 @app.exception_handler(QoderAPIError)
 async def handle_qoder_api_error(request: Request, exc: QoderAPIError) -> JSONResponse:
+    return _error_response_for_request(
+        request,
+        message=str(exc),
+        error_type=exc.error_type,
+        status_code=exc.status_code,
+    )
+
+
+@app.exception_handler(QoderRegistrationError)
+async def handle_qoder_registration_error(request: Request, exc: QoderRegistrationError) -> JSONResponse:
     return _error_response_for_request(
         request,
         message=str(exc),
@@ -485,7 +504,12 @@ def _build_runtime_settings_payload() -> dict[str, Any]:
         'settings': snapshot.model_dump(),
         'path': str(manager.path),
         'limiter': get_invocation_limiter().snapshot(),
+        'registration': get_registration_manager().describe(),
     }
+
+
+def _build_registration_payload() -> dict[str, Any]:
+    return get_registration_manager().describe()
 
 
 def _build_accounts_payload(*, include_pending: bool = True) -> dict[str, Any]:
@@ -516,6 +540,7 @@ async def webui_overview() -> dict[str, Any]:
         "auth": payload_auth["auth"],
         "session": payload_auth["session"],
         "accounts": _build_accounts_payload(),
+        "registration": _build_registration_payload(),
     }
 
 
@@ -535,7 +560,9 @@ async def webui_update_runtime_settings(
     request: RuntimeSettingsUpdateRequest,
 ) -> dict[str, Any]:
     manager = get_runtime_settings_manager()
-    snapshot = manager.save(request.model_dump())
+    current_payload = manager.load().model_dump()
+    current_payload.update(request.model_dump(exclude_unset=True))
+    snapshot = manager.save(current_payload)
     limiter_snapshot = await get_invocation_limiter().update_limit(
         snapshot.account_pool_max_concurrency
     )
@@ -698,6 +725,78 @@ async def webui_refresh_account_status(account_id: str) -> dict[str, Any]:
         "account": _serialize_account(refreshed_account),
         "status": snapshot.model_dump(exclude_none=True),
     }
+
+
+@app.get("/webui/api/registration")
+async def webui_registration() -> dict[str, Any]:
+    return _build_registration_payload()
+
+
+@app.post("/webui/api/registration/start")
+async def webui_start_registration() -> dict[str, Any]:
+    snapshot = get_registration_manager().start_registration(get_runtime_settings_manager().load())
+    payload = _build_registration_payload()
+    payload["session"] = snapshot.to_public_dict()
+    payload["message"] = snapshot.message
+    return payload
+
+
+@app.get("/webui/api/registration/sessions/{session_id}")
+async def webui_get_registration_session(session_id: str) -> dict[str, Any]:
+    return get_registration_manager().get_session(session_id).snapshot().to_public_dict()
+
+
+@app.post("/webui/api/registration/sessions/{session_id}/cancel")
+async def webui_cancel_registration_session(session_id: str) -> dict[str, Any]:
+    return get_registration_manager().cancel(session_id).to_public_dict()
+
+@app.post("/webui/api/registration/worker/claim")
+async def webui_claim_registration_worker() -> dict[str, Any]:
+    claim = get_registration_manager().claim_current()
+    return {"session": claim.to_dict() if claim else None}
+
+
+@app.post("/webui/api/registration/sessions/{session_id}/worker/claim")
+async def webui_claim_registration_session(session_id: str) -> dict[str, Any]:
+    claim = get_registration_manager().claim_session(session_id)
+    return {"session": claim.to_dict()}
+
+
+@app.post("/webui/api/registration/sessions/{session_id}/worker/progress")
+async def webui_registration_worker_progress(
+    session_id: str,
+    request: RegistrationWorkerProgressRequest,
+) -> dict[str, Any]:
+    snapshot = get_registration_manager().append_worker_progress(
+        session_id,
+        line=request.line,
+        status=request.status,
+        current_email=request.current_email,
+    )
+    return snapshot.to_public_dict()
+
+
+@app.post("/webui/api/registration/sessions/{session_id}/worker/complete")
+async def webui_registration_worker_complete(
+    session_id: str,
+    request: RegistrationWorkerCompleteRequest,
+) -> dict[str, Any]:
+    snapshot = get_registration_manager().complete_worker_account(
+        session_id,
+        email=request.email,
+        password=request.password,
+    )
+    return snapshot.to_public_dict()
+
+
+@app.post("/webui/api/registration/sessions/{session_id}/worker/fail")
+async def webui_registration_worker_fail(
+    session_id: str,
+    request: RegistrationWorkerFailRequest,
+) -> dict[str, Any]:
+    snapshot = get_registration_manager().fail_worker(session_id, message=request.message)
+    return snapshot.to_public_dict()
+
 
 
 @app.post("/webui/api/accounts/refresh-statuses")
