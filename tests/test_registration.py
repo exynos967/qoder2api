@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from qoder2api.auth_state import inspect_local_auth
-from qoder2api.registration import discover_qoderreg_project_path, import_external_worker_account
+from qoder2api.registration import (
+    RegistrationSession,
+    discover_qoderreg_project_path,
+    import_external_worker_account,
+)
 from qoder2api.settings import Settings
 
 
@@ -66,3 +70,32 @@ def test_import_external_worker_account_persists_auth_state(monkeypatch, tmp_pat
     metadata_path = account.qoder_home_path / '.auth' / 'xieyi_device.json'
     assert metadata_path.is_file()
     assert 'pure_protocol_external' in metadata_path.read_text(encoding='utf-8')
+
+
+def test_registration_session_failure_does_not_finish_before_requested_count(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / '.qoder'), workspace=str(tmp_path))
+    session = RegistrationSession(settings=settings, requested_count=3, login_manager=object())
+    session.start()
+
+    snapshot = session.fail_current_account('worker failed once')
+
+    assert snapshot.done is False
+    assert snapshot.failure_count == 1
+    assert snapshot.success_count == 0
+    assert snapshot.status == 'waiting_worker'
+    assert '开始处理第 2/3 个账号' in snapshot.terminal_output
+
+
+def test_registration_session_finishes_with_summary_after_last_failure(tmp_path: Path) -> None:
+    settings = Settings(qoder_home=str(tmp_path / '.qoder'), workspace=str(tmp_path))
+    session = RegistrationSession(settings=settings, requested_count=2, login_manager=object())
+    session.start()
+
+    session.fail_current_account('worker failed once')
+    snapshot = session.fail_current_account('worker failed twice')
+
+    assert snapshot.done is True
+    assert snapshot.failure_count == 2
+    assert snapshot.success_count == 0
+    assert snapshot.status == 'error'
+    assert snapshot.message == '自动注册完成：失败 2 个账号'

@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .account_status import persist_summary_account_status
+from .account_status import persist_summary_account_status, refresh_account_status
 from .accounts import create_pending_managed_account, finalize_pending_account, remove_account
 from .auth_state import CachedUserInfo, ensure_auth_dir, save_cached_user_info, save_machine_id
 from .login import QoderLoginManager
@@ -121,6 +121,21 @@ def discover_qoderreg_project_path(explicit: str | None = None) -> Path:
     return candidates[0].resolve()
 
 
+def _refresh_imported_account_status_async(settings: Settings, qoder_home: Path) -> None:
+    def _runner() -> None:
+        try:
+            refresh_account_status(settings, qoder_home)
+        except Exception:
+            return
+
+    thread = threading.Thread(
+        target=_runner,
+        name='qoder2api-registration-status-refresh',
+        daemon=True,
+    )
+    thread.start()
+
+
 class RegistrationSession:
     """一次外部 worker 驱动的自动注册任务。"""
 
@@ -226,10 +241,10 @@ class RegistrationSession:
             self._snapshot.success_count += 1
             self._snapshot.current_email = email
 
-        if self.snapshot().success_count >= self.snapshot().requested_count:
+        if self._is_finished():
             self._update_snapshot(
-                status="success",
-                message=f"自动注册完成：成功 {self.snapshot().success_count} 个账号",
+                status=self._build_final_status(),
+                message=self._build_final_message(),
                 auth_url=None,
                 done=True,
                 terminal_output=self._append_output_line(
@@ -250,13 +265,23 @@ class RegistrationSession:
     def fail_current_account(self, message: str) -> RegistrationSessionSnapshot:
         with self._lock:
             self._snapshot.failure_count += 1
+        terminal_output = self._append_output_line(message)
+        if self._is_finished():
+            self._update_snapshot(
+                status=self._build_final_status(),
+                message=self._build_final_message(),
+                auth_url=None,
+                done=True,
+                terminal_output=terminal_output,
+            )
+            return self.snapshot()
         self._update_snapshot(
-            status="error",
-            message=message,
+            status="ready",
+            message="当前轮注册失败，准备下一轮...",
             auth_url=None,
-            done=True,
-            terminal_output=self._append_output_line(message),
+            terminal_output=terminal_output,
         )
+        self._prepare_next_account()
         return self.snapshot()
 
     def cancel(self) -> RegistrationSessionSnapshot:
@@ -285,6 +310,27 @@ class RegistrationSession:
             ),
             current_email=None,
         )
+
+    def _is_finished(self) -> bool:
+        snapshot = self.snapshot()
+        return (snapshot.success_count + snapshot.failure_count) >= snapshot.requested_count
+
+    def _build_final_status(self) -> str:
+        snapshot = self.snapshot()
+        if snapshot.failure_count == 0:
+            return "success"
+        if snapshot.success_count == 0:
+            return "error"
+        return "partial_success"
+
+    def _build_final_message(self) -> str:
+        snapshot = self.snapshot()
+        parts: list[str] = []
+        if snapshot.success_count:
+            parts.append(f"成功 {snapshot.success_count} 个账号")
+        if snapshot.failure_count:
+            parts.append(f"失败 {snapshot.failure_count} 个账号")
+        return f"自动注册完成：{'，'.join(parts) if parts else '无结果'}"
 
     def _append_output_line(self, line: str) -> str:
         current = self.snapshot().terminal_output
@@ -378,7 +424,9 @@ def import_external_worker_account(
             encoding="utf-8",
         )
         persist_summary_account_status(qoder_home, summary)
-        return finalize_pending_account(settings, account.id)
+        finalized_account = finalize_pending_account(settings, account.id)
+        _refresh_imported_account_status_async(settings, qoder_home)
+        return finalized_account
     except Exception:
         remove_account(settings, account.id)
         raise
