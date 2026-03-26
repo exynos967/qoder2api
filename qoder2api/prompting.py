@@ -31,6 +31,9 @@ _COMMON_IMAGE_MIME_TYPES = {
     ".svg": "image/svg+xml",
 }
 _REMOTE_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+_TOOL_RESULT_MAX_CHARS = 12000
+_TOOL_RESULT_HEAD_CHARS = 8000
+_TOOL_RESULT_TAIL_CHARS = 4000
 
 _INLINE_IMAGE_NAMES = {
     "image/jpeg": "inline-image.jpg",
@@ -206,6 +209,28 @@ def _normalize_message_text_content(content: str | list[dict[str, Any]] | None) 
     return "\n".join(parts).strip()
 
 
+def _truncate_tool_result_text(text: str) -> str:
+    normalized = text.strip()
+    if len(normalized) <= _TOOL_RESULT_MAX_CHARS:
+        return normalized
+
+    head = normalized[:_TOOL_RESULT_HEAD_CHARS].rstrip()
+    tail = normalized[-_TOOL_RESULT_TAIL_CHARS:].lstrip()
+    return (
+        f"[tool_result 内容过长，已截断。原始长度 {len(normalized)} 字符，"
+        f"仅保留前 {_TOOL_RESULT_HEAD_CHARS} 与后 {_TOOL_RESULT_TAIL_CHARS} 字符。]\n"
+        f"<tool_result_head>\n{head}\n</tool_result_head>\n"
+        f"<tool_result_tail>\n{tail}\n</tool_result_tail>"
+    )
+
+
+def _tool_message_content_to_text(
+    content: str | list[dict[str, Any]] | None,
+    attachments: list[PreparedAttachment],
+) -> str:
+    return _truncate_tool_result_text(_content_to_text(content, attachments))
+
+
 def _build_message_contents(
     content: str | list[dict[str, Any]] | None,
     attachments: list[PreparedAttachment],
@@ -257,6 +282,10 @@ def _build_upstream_message(
     if message.tool_calls:
         upstream["tool_calls"] = message.tool_calls
 
+    if message.role == "tool":
+        upstream["content"] = _tool_message_content_to_text(message.content, attachments)
+        return upstream
+
     if isinstance(message.content, list):
         contents = _build_message_contents(message.content, attachments)
         upstream["content"] = _normalize_message_text_content(message.content)
@@ -307,7 +336,10 @@ def _render_message_block(
     attachments: list[PreparedAttachment],
 ) -> str:
     role = _ROLE_LABELS.get(message.role, message.role)
-    content_text = _content_to_text(message.content, attachments) or "(空内容)"
+    if message.role == "tool":
+        content_text = _tool_message_content_to_text(message.content, attachments) or "(空内容)"
+    else:
+        content_text = _content_to_text(message.content, attachments) or "(空内容)"
 
     extras: list[str] = []
     if message.name:
