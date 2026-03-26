@@ -77,6 +77,33 @@ interface ManagedProcessHandle {
   terminate: () => void;
 }
 
+function isPureLoginSummaryNoise(line: string): boolean {
+  const normalized = line.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized.startsWith('LOGIN_URL=')
+    || normalized.startsWith('WORK_DIR=')
+    || normalized.startsWith('MACHINE_TOKEN=')
+    || normalized.startsWith('MACHINE_TYPE=')
+    || normalized.startsWith('LOGIN_MACHINE_ID=')
+  ) {
+    return false;
+  }
+  if (
+    normalized === '{'
+    || normalized === '}'
+    || normalized === '['
+    || normalized === ']'
+    || normalized === '},'
+    || normalized === '],'
+  ) {
+    return true;
+  }
+  return /^"[^"]+":\s*.+,?$/.test(normalized);
+}
+
 function stripJsonComments(input: string): string {
   let result = '';
   let inString = false;
@@ -452,6 +479,9 @@ function startPureLogin(
         machineType = normalized.slice('MACHINE_TYPE='.length).trim();
       }
       maybeResolveReady();
+    }
+    if (!prefix && isPureLoginSummaryNoise(normalized)) {
+      return;
     }
     await onLine(`${prefix}${normalized}`);
   };
