@@ -34,3 +34,32 @@ def test_load_qoder_models_normalizes_mmodel_display_name(tmp_path) -> None:
 
     with pytest.raises(ValueError):
         resolve_model_name('MiniMax M2.7', models, 'auto')
+
+
+def test_public_id_override_for_ultimate(tmp_path) -> None:
+    qoder_home = tmp_path / '.qoder'
+    auth_dir = qoder_home / '.auth'
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "models").write_text(
+        json.dumps(
+            {
+                "chat": [
+                    {
+                        "key": "ultimate",
+                        "display_name": "Ultimate",
+                        "max_input_tokens": 180000,
+                        "max_output_tokens": 32768,
+                    }
+                ]
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    models = load_qoder_models(qoder_home)
+
+    assert len(models) == 1
+    assert models[0].id == "ultimate"
+    assert models[0].display_name == "Ultimate"
+    assert models[0].public_id == "claude-opus-4-6"
+    assert resolve_model_name("claude-opus-4-6", models, "auto") == "ultimate"

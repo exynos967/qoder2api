@@ -27,7 +27,7 @@ class QoderModelInfo:
 
 
 _DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
-_PUBLIC_ID_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
+_PUBLIC_ID_OVERRIDES = {"ultimate": "claude-opus-4-6", "mmodel": "MiniMax-M2.7"}
 
 
 
