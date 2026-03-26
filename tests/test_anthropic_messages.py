@@ -10,6 +10,7 @@ from qoder2api.runtime_settings import RuntimeSettingsSnapshot
 from qoder2api.anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicStreamTranslator,
+    build_anthropic_message_response,
     convert_anthropic_request_to_chat_request,
 )
 from qoder2api.streaming import ParsedStreamEvent
@@ -330,6 +331,45 @@ def test_anthropic_messages_non_stream_returns_tool_use(monkeypatch) -> None:
     assert fake_invoker.calls[0]["tool_choice"] == "required"
 
 
+def test_build_anthropic_message_response_sanitizes_tool_input_for_schema() -> None:
+    payload = build_anthropic_message_response(
+        message_id="msg_test",
+        model="claude-opus-4-6",
+        output_text="",
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '"北京"',
+                },
+            }
+        ],
+        finish_reason="tool_calls",
+        input_tokens=10,
+        output_tokens=10,
+        tool_schemas={
+            "get_weather": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                },
+                "required": ["city"],
+            }
+        },
+    )
+
+    assert payload["content"] == [
+        {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "get_weather",
+            "input": {"city": "北京"},
+        }
+    ]
+
+
 def test_anthropic_messages_stream_emits_named_events(monkeypatch) -> None:
     fake_invoker = _FakeAnthropicTextInvoker()
     monkeypatch.setattr(app_module, "get_invoker", lambda: fake_invoker)
@@ -417,6 +457,55 @@ def test_anthropic_stream_translator_emits_tool_use_events() -> None:
         "partial_json": '{"city":"北京"}',
     }
     assert pairs[-2][1]["delta"]["stop_reason"] == "tool_use"
+
+
+def test_anthropic_stream_translator_sanitizes_tool_use_input_for_schema() -> None:
+    translator = AnthropicStreamTranslator(
+        message_id="msg_test",
+        prompt_text="请调用工具",
+        tool_schemas={
+            "get_weather": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                },
+                "required": ["city"],
+            }
+        },
+    )
+    payloads: list[str] = []
+    payloads.extend(translator.start(model="claude-opus-4-6"))
+    payloads.extend(
+        translator.feed(
+            ParsedStreamEvent(
+                tool_call_deltas=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather"},
+                    },
+                    {
+                        "index": 0,
+                        "type": "function",
+                        "function": {"arguments": '"北京"'},
+                    },
+                ],
+                finish_reason="tool_calls",
+            )
+        )
+    )
+    payloads.extend(translator.finish())
+
+    lines = [line for line in "".join(payloads).splitlines() if line]
+    pairs = _extract_sse_pairs(lines)
+    tool_deltas = [
+        payload["delta"]["partial_json"]
+        for event, payload in pairs
+        if event == "content_block_delta" and payload.get("delta", {}).get("type") == "input_json_delta"
+    ]
+
+    assert tool_deltas == ['{"city":"北京"}']
 
 
 def test_anthropic_messages_non_stream_applies_stop_sequences(monkeypatch) -> None:

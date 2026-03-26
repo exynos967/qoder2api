@@ -58,6 +58,9 @@ class StopSequenceResult:
     matched: str | None = None
 
 
+_SCHEMA_MISSING = object()
+
+
 
 
 def _normalize_stop_sequences(stop_sequences: list[str] | None) -> list[str]:
@@ -306,6 +309,182 @@ def _anthropic_tool_to_openai(tool: dict[str, Any]) -> dict[str, Any]:
     return {"type": "function", "function": function_payload}
 
 
+def _build_tool_schema_map(tools: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    tool_schemas: dict[str, dict[str, Any]] = {}
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        name = str(tool.get("name") or "").strip()
+        input_schema = tool.get("input_schema")
+        if not name or not isinstance(input_schema, dict):
+            continue
+        tool_schemas[name] = input_schema
+    return tool_schemas
+
+
+def _parse_tool_arguments(raw_arguments: str) -> Any:
+    stripped = raw_arguments.strip()
+    if not stripped:
+        return {}
+
+    candidates = [stripped]
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3:
+            candidates.append("\n".join(lines[1:-1]).strip())
+    first_object = stripped.find("{")
+    last_object = stripped.rfind("}")
+    if 0 <= first_object < last_object:
+        candidates.append(stripped[first_object : last_object + 1].strip())
+
+    seen: set[str] = set()
+    while candidates:
+        candidate = candidates.pop(0).strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, str):
+            nested = parsed.strip()
+            if nested.startswith(("{", "[")) and nested not in seen:
+                candidates.append(nested)
+                continue
+            return parsed
+        return parsed
+
+    return stripped
+
+
+def _coerce_tool_value(value: Any, schema: dict[str, Any]) -> Any:
+    schema_type = str(schema.get("type") or "").strip().lower()
+    if not schema_type:
+        return value
+
+    if schema_type == "object":
+        return _coerce_tool_object(value, schema)
+    if schema_type == "string":
+        if value is None:
+            return _SCHEMA_MISSING
+        if isinstance(value, (dict, list)):
+            return _SCHEMA_MISSING
+        return str(value)
+    if schema_type == "integer":
+        if isinstance(value, bool):
+            return _SCHEMA_MISSING
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.lstrip("-").isdigit():
+                return int(stripped)
+        return _SCHEMA_MISSING
+    if schema_type == "number":
+        if isinstance(value, bool):
+            return _SCHEMA_MISSING
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            try:
+                return float(stripped)
+            except ValueError:
+                return _SCHEMA_MISSING
+        return _SCHEMA_MISSING
+    if schema_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if stripped in {"true", "1", "yes", "y", "on"}:
+                return True
+            if stripped in {"false", "0", "no", "n", "off"}:
+                return False
+        return _SCHEMA_MISSING
+    if schema_type == "array":
+        item_schema = schema.get("items")
+        normalized_items: list[Any] = []
+        if isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = [value]
+        for item in raw_items:
+            if isinstance(item_schema, dict):
+                coerced = _coerce_tool_value(item, item_schema)
+                if coerced is not _SCHEMA_MISSING:
+                    normalized_items.append(coerced)
+            else:
+                normalized_items.append(item)
+        return normalized_items
+    return value
+
+
+def _coerce_tool_object(value: Any, schema: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(value, str):
+        value = _parse_tool_arguments(value)
+
+    properties = schema.get("properties")
+    schema_properties = properties if isinstance(properties, dict) else {}
+
+    if not isinstance(value, dict):
+        if len(schema_properties) == 1:
+            field_name, field_schema = next(iter(schema_properties.items()))
+            if isinstance(field_schema, dict):
+                coerced = _coerce_tool_value(value, field_schema)
+                if coerced is not _SCHEMA_MISSING:
+                    return {field_name: coerced}
+        return {}
+
+    if not schema_properties:
+        return dict(value)
+
+    normalized: dict[str, Any] = {}
+    for field_name, field_schema in schema_properties.items():
+        if field_name not in value:
+            continue
+        if isinstance(field_schema, dict):
+            coerced = _coerce_tool_value(value[field_name], field_schema)
+            if coerced is not _SCHEMA_MISSING:
+                normalized[field_name] = coerced
+        else:
+            normalized[field_name] = value[field_name]
+
+    if not normalized and len(schema_properties) == 1:
+        field_name, field_schema = next(iter(schema_properties.items()))
+        if isinstance(field_schema, dict):
+            for fallback_key in ("value", "input", "_arguments_text", "text"):
+                if fallback_key not in value:
+                    continue
+                coerced = _coerce_tool_value(value[fallback_key], field_schema)
+                if coerced is not _SCHEMA_MISSING:
+                    normalized[field_name] = coerced
+                    break
+
+    additional_properties = schema.get("additionalProperties", True)
+    if additional_properties is not False:
+        for key, item in value.items():
+            if key in normalized or key in schema_properties:
+                continue
+            normalized[key] = item
+
+    return normalized
+
+
+def _sanitize_tool_input(raw_arguments: str, input_schema: dict[str, Any] | None) -> dict[str, Any]:
+    parsed_arguments = _parse_tool_arguments(raw_arguments)
+    if not isinstance(input_schema, dict) or not input_schema:
+        return parsed_arguments if isinstance(parsed_arguments, dict) else {}
+
+    normalized = _coerce_tool_value(parsed_arguments, input_schema)
+    return normalized if isinstance(normalized, dict) else {}
+
+
 def _anthropic_tool_choice_to_openai(
     tool_choice: str | dict[str, Any] | None,
 ) -> str | dict[str, Any] | None:
@@ -357,22 +536,23 @@ def convert_anthropic_request_to_chat_request(
     )
 
 
-def _tool_call_to_anthropic_block(tool_call: dict[str, Any]) -> dict[str, Any]:
+def _tool_call_to_anthropic_block(
+    tool_call: dict[str, Any],
+    tool_schemas: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     function_payload = tool_call.get("function") or {}
+    function_name = str(function_payload.get("name") or "").strip()
     raw_arguments = str(function_payload.get("arguments") or "").strip()
-    if raw_arguments:
-        try:
-            parsed_arguments = json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            parsed_arguments = {"_arguments_text": raw_arguments}
-    else:
-        parsed_arguments = {}
+    parsed_arguments = _sanitize_tool_input(
+        raw_arguments,
+        (tool_schemas or {}).get(function_name),
+    )
 
     return {
         "type": "tool_use",
         "id": str(tool_call.get("id") or f"toolu_{uuid.uuid4().hex}"),
-        "name": str(function_payload.get("name") or "").strip(),
-        "input": parsed_arguments if isinstance(parsed_arguments, dict) else {"value": parsed_arguments},
+        "name": function_name,
+        "input": parsed_arguments,
     }
 
 
@@ -401,6 +581,7 @@ def build_anthropic_message_response(
     input_tokens: int,
     output_tokens: int,
     stop_sequence: str | None = None,
+    tool_schemas: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     normalized_reasoning = reasoning_text.strip()
@@ -414,7 +595,7 @@ def build_anthropic_message_response(
     if normalized_text:
         content.append({"type": "text", "text": normalized_text})
     for tool_call in tool_calls or []:
-        content.append(_tool_call_to_anthropic_block(tool_call))
+        content.append(_tool_call_to_anthropic_block(tool_call, tool_schemas))
 
     return {
         "id": message_id,
@@ -447,6 +628,7 @@ class AnthropicStreamTranslator:
         message_id: str,
         prompt_text: str,
         stop_sequences: list[str] | None = None,
+        tool_schemas: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.message_id = message_id
         self.prompt_tokens = _estimate_tokens(prompt_text)
@@ -465,6 +647,7 @@ class AnthropicStreamTranslator:
         self._text_block_stopped = False
         self._tool_states: dict[int, _ToolBlockState] = {}
         self._next_content_index = 0
+        self.tool_schemas = dict(tool_schemas or {})
 
     def start(self, *, model: str) -> list[str]:
         self._model = model
@@ -519,7 +702,7 @@ class AnthropicStreamTranslator:
         for state in self._tool_states.values():
             if state.stopped:
                 continue
-            payloads.extend(self._emit_pending_tool_arguments(state))
+            payloads.extend(self._emit_pending_tool_arguments(state, final=True))
             payloads.append(
                 _anthropic_sse_payload(
                     "content_block_stop",
@@ -741,11 +924,14 @@ class AnthropicStreamTranslator:
                         },
                     )
                 )
-
-            payloads.extend(self._emit_pending_tool_arguments(state))
         return payloads
 
-    def _emit_pending_tool_arguments(self, state: _ToolBlockState) -> list[str]:
+    def _emit_pending_tool_arguments(
+        self,
+        state: _ToolBlockState,
+        *,
+        final: bool = False,
+    ) -> list[str]:
         payloads: list[str] = []
         tool_index = next(
             (index for index, tool_state in self._tool_states.items() if tool_state is state),
@@ -755,7 +941,18 @@ class AnthropicStreamTranslator:
             return payloads
 
         function_payload = self.tool_calls[tool_index].get("function") or {}
-        arguments_text = str(function_payload.get("arguments") or "")
+        if not final:
+            return payloads
+
+        tool_name = str(function_payload.get("name") or "").strip()
+        arguments_text = json.dumps(
+            _sanitize_tool_input(
+                str(function_payload.get("arguments") or ""),
+                self.tool_schemas.get(tool_name),
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         if len(arguments_text) <= state.emitted_arguments_length:
             return payloads
 
@@ -816,5 +1013,5 @@ class AnthropicStreamTranslator:
                     },
                 )
             )
-            payloads.extend(self._emit_pending_tool_arguments(state))
+            payloads.extend(self._emit_pending_tool_arguments(state, final=True))
         return payloads

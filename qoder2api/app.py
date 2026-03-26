@@ -30,6 +30,7 @@ from .account_status import load_account_status, refresh_account_status
 from .anthropic_messages import (
     AnthropicMessagesRequest,
     AnthropicStreamTranslator,
+    _build_tool_schema_map,
     _apply_stop_sequences,
     build_anthropic_message_response,
     convert_anthropic_request_to_chat_request,
@@ -1155,6 +1156,7 @@ async def chat_completions(request: ChatCompletionRequest):
 async def anthropic_messages(request: AnthropicMessagesRequest):
     _log_debug_request("/v1/messages", request.model_dump(exclude_none=True))
     chat_request = convert_anthropic_request_to_chat_request(request)
+    tool_schemas = _build_tool_schema_map(request.tools)
     prompt = render_openai_messages(chat_request.messages)
     message_id = f"msg_{uuid.uuid4().hex}"
     input_tokens = _estimate_tokens(prompt.prompt)
@@ -1185,6 +1187,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 stop_sequence=stop_result.matched,
+                tool_schemas=tool_schemas,
             )
         )
 
@@ -1193,6 +1196,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
             message_id=message_id,
             prompt_text=prompt.prompt,
             stop_sequences=request.stop_sequences,
+            tool_schemas=tool_schemas,
         )
         try:
             iterator, resolved_model = await _start_streaming_completion(
