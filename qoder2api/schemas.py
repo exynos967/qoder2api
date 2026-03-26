@@ -99,6 +99,14 @@ class RuntimeSettingsUpdateRequest(BaseModel):
         return payload
 
 
+class RegistrationStartRequest(BaseModel):
+    """创建自动注册任务。"""
+
+    requested_count: int | None = Field(default=None, ge=1, le=500)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class RegistrationWorkerProgressRequest(BaseModel):
     """外部注册 Worker 上报进度。"""
 

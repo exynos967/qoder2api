@@ -241,6 +241,47 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRetryableNavigationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("ns_error_net_reset")
+    || normalized.includes("err_connection_reset")
+    || normalized.includes("err_proxy_connection_failed")
+    || normalized.includes("err_tunnel_connection_failed")
+    || normalized.includes("timeout")
+    || normalized.includes("net::")
+  );
+}
+
+async function gotoWithRetry(
+  page: Page,
+  url: string,
+  options: { timeout: number; attempts?: number },
+): Promise<void> {
+  const { timeout, attempts = 3 } = options;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableNavigationError(error) || attempt >= attempts) {
+        throw error;
+      }
+      const delayMs = 1500 * attempt;
+      log.warn(`打开页面失败，准备重试 (${attempt}/${attempts})`, {
+        url,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 function readAccounts(accountsFile: string): StoredAccountRecord[] {
   if (!existsSync(accountsFile)) {
     throw new Error(`账号文件不存在: ${accountsFile}`);
@@ -443,7 +484,15 @@ async function tryCookieLogin(
   const entryUrl = resolveEntryUrl(targetUrl);
   log.info(`尝试使用 accounts.json 中保存的 cookies 自动登录: ${entryUrl}`);
   await context.addCookies(account.cookies);
-  await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  try {
+    await gotoWithRetry(page, entryUrl, { timeout: 30_000, attempts: 3 });
+  } catch (error) {
+    log.warn("Cookie 登录入口打开失败，准备回退账号密码登录", {
+      url: entryUrl,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
   await waitForPageStable(page);
 
   if (!(await isStillOnSignIn(page))) {
@@ -458,11 +507,10 @@ async function tryCookieLogin(
 async function doCredentialLogin(
   page: Page,
   account: StoredAccountRecord,
-  targetUrl?: string,
 ): Promise<void> {
-  const entryUrl = resolveEntryUrl(targetUrl);
+  const entryUrl = resolveEntryUrl();
   log.info(`打开登录页面: ${entryUrl}`);
-  await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await gotoWithRetry(page, entryUrl, { timeout: 30_000, attempts: 3 });
   await waitForPageStable(page);
   await logBrowserFingerprint(page);
 
@@ -511,6 +559,12 @@ async function doCredentialLogin(
     const bodyText = await page.evaluate(() => document.body.innerText || "");
     throw new Error(`登录后仍停留在 sign-in 页面: ${bodyText.slice(0, 300)}`);
   }
+}
+
+async function openOauthTarget(page: Page, targetUrl: string): Promise<void> {
+  log.info(`登录成功，准备打开 OAuth 页面: ${targetUrl}`);
+  await gotoWithRetry(page, targetUrl, { timeout: 30_000, attempts: 3 });
+  await waitForPageStable(page);
 }
 
 function isLocalCallbackUrl(url: string): boolean {
@@ -660,10 +714,14 @@ async function main(): Promise<void> {
   try {
     const cookieLoginOk = await tryCookieLogin(context, page, account, options.targetUrl);
     if (!cookieLoginOk) {
-      await doCredentialLogin(page, account, options.targetUrl);
+      await doCredentialLogin(page, account);
     }
 
     if (options.targetUrl) {
+      const currentUrl = page.url();
+      if (!currentUrl.includes("/device/selectAccounts") && !isLocalCallbackUrl(currentUrl)) {
+        await openOauthTarget(page, options.targetUrl);
+      }
       await waitForOauthCompletion(page, options.callbackTimeoutSeconds);
     }
 

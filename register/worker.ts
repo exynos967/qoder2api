@@ -21,20 +21,15 @@ interface WorkerAppConfig {
   autoStart?: boolean;
   count?: number;
   browserMode?: string;
-  proxy?: string | null;
+  locale?: string;
+  languages?: string[] | string;
+  proxy?: string | { server: string; username?: string; password?: string; bypass?: string } | null;
   mailApiBase?: string;
   mailApiKey?: string;
   pythonExecutable?: string;
   pureLoginScript?: string;
   pureLoginTimeoutSeconds?: number;
 }
-
-type RegisterRuntimeSettings = {
-  registration_browser_mode?: string;
-  registration_proxy_url?: string;
-  registration_mail_api_base?: string;
-  registration_mail_api_key?: string;
-};
 
 interface WorkerClaimPayload {
   session_id: string;
@@ -44,7 +39,6 @@ interface WorkerClaimPayload {
   failure_count: number;
   current_index: number;
   current_email?: string | null;
-  settings?: RegisterRuntimeSettings;
 }
 
 interface CliOptions {
@@ -272,26 +266,15 @@ async function claimSession(backendUrl: string, sessionId?: string): Promise<Wor
   return payload.session;
 }
 
-async function syncRuntimeSettings(backendUrl: string, config: WorkerAppConfig): Promise<void> {
-  await apiRequest<Record<string, unknown>>(backendUrl, '/webui/api/settings', {
-    method: 'PUT',
-    body: JSON.stringify({
-      registration_count: Math.max(1, Number.parseInt(String(config.count ?? 1), 10) || 1),
-      registration_browser_mode: (config.browserMode || 'headless').trim() || 'headless',
-      registration_proxy_url: typeof config.proxy === 'string' ? config.proxy : '',
-      registration_mail_api_base: config.mailApiBase || 'https://maliapi.215.im/v1',
-      registration_mail_api_key: config.mailApiKey || '',
-    }),
-  });
-}
-
-async function startRegistration(backendUrl: string): Promise<string | null> {
+async function startRegistration(backendUrl: string, requestedCount: number): Promise<string | null> {
   const payload = await apiRequest<{ session?: { session_id?: string } | null }>(
     backendUrl,
     '/webui/api/registration/start',
     {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        requested_count: Math.max(1, Number.parseInt(String(requestedCount || 1), 10) || 1),
+      }),
     },
   );
   return payload.session?.session_id || null;
@@ -401,6 +384,7 @@ function startPureLogin(
   let machineToken = '';
   let machineType = '';
   let readyResolved = false;
+  let terminatedByWorker = false;
 
   let readyResolve!: (payload: PureLoginReadyPayload) => void;
   let readyReject!: (error: Error) => void;
@@ -472,7 +456,7 @@ function startPureLogin(
       }
       reject(error);
     });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       void (async () => {
         if (stdoutBuffer.trim()) {
           await handleLine('', stdoutBuffer);
@@ -480,8 +464,13 @@ function startPureLogin(
         if (stderrBuffer.trim()) {
           await handleLine('[pure-login][stderr] ', stderrBuffer);
         }
+        if (terminatedByWorker && signal === 'SIGTERM') {
+          reject(new Error('qoder_pure_login.py 已被 Worker 主动终止'));
+          return;
+        }
         if (code !== 0) {
-          const error = new Error(`qoder_pure_login.py 退出码异常: ${code ?? -1}`);
+          const signalSuffix = signal ? `, signal=${signal}` : '';
+          const error = new Error(`qoder_pure_login.py 退出码异常: ${code ?? -1}${signalSuffix}`);
           if (!readyResolved) {
             readyReject(error);
           }
@@ -523,6 +512,7 @@ function startPureLogin(
     result,
     terminate: () => {
       if (!child.killed) {
+        terminatedByWorker = true;
         child.kill('SIGTERM');
       }
     },
@@ -543,18 +533,25 @@ async function sendFailure(backendUrl: string, sessionId: string, message: strin
 async function writeRuntimeConfig(
   claim: WorkerClaimPayload,
   tempDir: string,
+  appConfig: WorkerAppConfig,
 ): Promise<{ configPath: string; outputFile: string }> {
   const outputFile = path.join(tempDir, 'accounts.json');
   const configPath = path.join(tempDir, 'worker-config.json');
-  const settings = claim.settings || {};
+  const hasLocalProxy = Object.prototype.hasOwnProperty.call(appConfig, 'proxy');
+  const mergedProxy = hasLocalProxy ? (appConfig.proxy ?? null) : null;
   const payload = {
     count: 1,
-    browserMode: settings.registration_browser_mode || 'headless',
-    locale: 'zh-CN',
-    languages: ['zh-CN', 'zh'],
-    proxy: settings.registration_proxy_url || null,
-    mailApiBase: settings.registration_mail_api_base || 'https://maliapi.215.im/v1',
-    mailApiKey: settings.registration_mail_api_key || '',
+    browserMode: (appConfig.browserMode || 'headless').trim() || 'headless',
+    locale: (appConfig.locale || 'zh-CN').trim() || 'zh-CN',
+    languages: Array.isArray(appConfig.languages)
+      ? appConfig.languages
+      : typeof appConfig.languages === 'string'
+        ? appConfig.languages
+        : ['zh-CN', 'zh'],
+    proxy: mergedProxy,
+    mailApiBase: (appConfig.mailApiBase || 'https://maliapi.215.im/v1').trim()
+      || 'https://maliapi.215.im/v1',
+    mailApiKey: appConfig.mailApiKey || '',
     outputFile,
   };
   await writeFile(configPath, JSON.stringify(payload, null, 2), 'utf8');
@@ -648,11 +645,11 @@ async function runClaim(
   }
 
   try {
-    const { configPath, outputFile } = await writeRuntimeConfig(claim, tempDir);
+    const { configPath, outputFile } = await writeRuntimeConfig(claim, tempDir, appConfig);
     await sendProgress(
       backendUrl,
       claim.session_id,
-      `开始处理第 ${claim.current_index}/${claim.requested_count} 个账号。`,
+      `开始处理第 ${claim.current_index}/${claim.requested_count} 个账号（使用本地 worker 配置执行注册/OAuth）。`,
       'registering',
       undefined,
     );
@@ -706,6 +703,7 @@ async function runClaim(
       await sendComplete(backendUrl, claim.session_id, account.email, account.password || '', summary);
     } catch (error) {
       pureLogin.terminate();
+      await pureLogin.result.catch(() => undefined);
       throw error;
     }
   } catch (error) {
@@ -750,8 +748,10 @@ async function main(): Promise<void> {
     let claim = await claimSession(backendUrl, options.sessionId);
     if (!claim && !options.sessionId && autoStart && !autoStarted) {
       log.info('当前没有待处理注册任务，准备自动向 qoder2api 创建任务。');
-      await syncRuntimeSettings(backendUrl, appConfig);
-      const startedSessionId = await startRegistration(backendUrl);
+      const startedSessionId = await startRegistration(
+        backendUrl,
+        Math.max(1, Number.parseInt(String(appConfig.count ?? 1), 10) || 1),
+      );
       autoStarted = true;
       if (startedSessionId) {
         log.info(`已自动创建注册会话: ${startedSessionId}`);

@@ -7,6 +7,7 @@ from typing import Any
 
 from qoder2api import app as app_module
 from qoder2api.registration import QoderRegistrationError, RegistrationSessionSnapshot
+from qoder2api.schemas import RegistrationStartRequest
 from qoder2api.runtime_settings import RuntimeSettingsSnapshot
 from qoder2api.streaming import ParsedStreamEvent
 
@@ -335,7 +336,7 @@ class _FakeRegistrationManager:
     def __init__(self, session: RegistrationSessionSnapshot | None = None) -> None:
         self._session = session
         self.cancelled = False
-        self.started_with: RuntimeSettingsSnapshot | None = None
+        self.started_with: int | None = None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -349,19 +350,20 @@ class _FakeRegistrationManager:
     def current_session(self) -> RegistrationSessionSnapshot | None:
         return self._session
 
-    def start_registration(self, runtime_snapshot: RuntimeSettingsSnapshot) -> RegistrationSessionSnapshot:
-        self.started_with = runtime_snapshot
+    def start_registration(self, requested_count: int | None = None) -> RegistrationSessionSnapshot:
+        self.started_with = requested_count
         if self._session is None:
+            current_requested_count = max(1, int(requested_count or 1))
             self._session = RegistrationSessionSnapshot(
                 session_id='reg-1',
                 status='waiting_worker',
-                message='等待注册 Worker 处理第 1/1 个账号...',
+                message=f'等待注册 Worker 处理第 1/{current_requested_count} 个账号...',
                 auth_url=None,
                 started_at=1.0,
                 updated_at=2.0,
                 done=False,
                 terminal_output='registering...',
-                requested_count=1,
+                requested_count=current_requested_count,
                 success_count=0,
                 failure_count=0,
                 current_email='demo@example.com',
@@ -404,12 +406,6 @@ class _FakeRegistrationManager:
                 'failure_count': 0,
                 'current_index': 1,
                 'current_email': self._session.current_email,
-                'settings': {
-                    'registration_browser_mode': 'headless',
-                    'registration_proxy_url': '',
-                    'registration_mail_api_base': 'https://maliapi.215.im/v1',
-                    'registration_mail_api_key': '',
-                },
             },
         })()
 
@@ -494,9 +490,14 @@ def test_webui_registration_routes(monkeypatch) -> None:
     assert overview['available'] is True
     assert overview['session'] is None
 
-    started = asyncio.run(app_module.webui_start_registration())
+    started = asyncio.run(
+        app_module.webui_start_registration(
+            RegistrationStartRequest(requested_count=3),
+        )
+    )
     assert started['session']['session_id'] == 'reg-1'
-    assert manager.started_with is not None
+    assert manager.started_with == 3
+    assert started['session']['requested_count'] == 3
 
     fetched = asyncio.run(app_module.webui_get_registration_session('reg-1'))
     assert fetched['session_id'] == 'reg-1'

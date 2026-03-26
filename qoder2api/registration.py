@@ -14,7 +14,6 @@ from .account_status import persist_summary_account_status, refresh_account_stat
 from .accounts import create_pending_managed_account, finalize_pending_account, remove_account
 from .auth_state import CachedUserInfo, ensure_auth_dir, save_cached_user_info, save_machine_id
 from .login import QoderLoginManager
-from .runtime_settings import RuntimeSettingsSnapshot
 from .settings import Settings
 
 _SESSION_TTL_SECONDS = 15 * 60
@@ -79,10 +78,6 @@ class RegistrationWorkerClaim:
     failure_count: int
     current_index: int
     current_email: str | None
-    browser_mode: str
-    proxy_url: str
-    mail_api_base: str
-    mail_api_key: str
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -93,12 +88,6 @@ class RegistrationWorkerClaim:
             "failure_count": self.failure_count,
             "current_index": self.current_index,
             "current_email": self.current_email,
-            "settings": {
-                "registration_browser_mode": self.browser_mode,
-                "registration_proxy_url": self.proxy_url,
-                "registration_mail_api_base": self.mail_api_base,
-                "registration_mail_api_key": self.mail_api_key,
-            },
         }
 
 
@@ -139,12 +128,11 @@ class RegistrationSession:
         self,
         *,
         settings: Settings,
-        runtime_snapshot: RuntimeSettingsSnapshot,
+        requested_count: int,
         login_manager: QoderLoginManager,
         output_limit: int = _OUTPUT_LIMIT,
     ) -> None:
         self.settings = settings
-        self.runtime_snapshot = runtime_snapshot
         self.login_manager = login_manager
         self.output_limit = output_limit
         self.session_id = uuid.uuid4().hex
@@ -161,7 +149,7 @@ class RegistrationSession:
             updated_at=started_at,
             done=False,
             terminal_output="正在初始化自动注册流程...",
-            requested_count=max(1, int(runtime_snapshot.registration_count or 1)),
+            requested_count=max(1, int(requested_count or 1)),
             success_count=0,
             failure_count=0,
             current_email=None,
@@ -198,10 +186,6 @@ class RegistrationSession:
             failure_count=snapshot.failure_count,
             current_index=current_index,
             current_email=snapshot.current_email,
-            browser_mode=self.runtime_snapshot.registration_browser_mode,
-            proxy_url=(self.runtime_snapshot.registration_proxy_url or self.runtime_snapshot.proxy_url or "").strip(),
-            mail_api_base=self.runtime_snapshot.registration_mail_api_base,
-            mail_api_key=self.runtime_snapshot.registration_mail_api_key,
         )
 
     def append_worker_progress(
@@ -429,7 +413,7 @@ class QoderRegistrationManager:
         project_path = discover_qoderreg_project_path()
         payload = {
             "available": True,
-            "message": "外部注册 Worker 模式：请在 register/ 目录单独运行 worker.ts",
+            "message": "外部注册 Worker 模式：请在 register/ 目录单独运行 worker.ts，浏览器/代理/邮箱参数由 Worker 自己控制。",
             "worker_mode": "external",
             "project_path": str(project_path),
             "source_available": project_path.is_dir(),
@@ -449,14 +433,14 @@ class QoderRegistrationManager:
             self._latest_session_id = latest.session_id
             return latest.snapshot()
 
-    def start_registration(self, runtime_snapshot: RuntimeSettingsSnapshot) -> RegistrationSessionSnapshot:
+    def start_registration(self, requested_count: int | None = None) -> RegistrationSessionSnapshot:
         with self._lock:
             current = self.current_session()
             if current is not None and not current.done:
                 return current
             session = RegistrationSession(
                 settings=self.settings,
-                runtime_snapshot=runtime_snapshot,
+                requested_count=max(1, int(requested_count or 1)),
                 login_manager=self.login_manager,
             )
             started_snapshot = session.start()

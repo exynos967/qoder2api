@@ -780,11 +780,6 @@ function renderRuntimeSettings(payload) {
 
     state.runtimeSettings = settings;
     $('settings-proxy-url').value = settings.proxy_url || '';
-    $('registration-count').value = String(settings.registration_count ?? 1);
-    $('registration-browser-mode').value = settings.registration_browser_mode || 'headless';
-    $('registration-proxy-url').value = settings.registration_proxy_url || '';
-    $('registration-mail-api-base').value = settings.registration_mail_api_base || 'https://maliapi.215.im/v1';
-    $('registration-mail-api-key').value = settings.registration_mail_api_key || '';
     $('settings-llmapi-api-key').value = settings.llmapi_api_key || '';
     $('settings-account-pool-max-concurrency').value = String(settings.account_pool_max_concurrency ?? 4);
     setToggleSwitchState('settings-default-stream-openai', defaultStreamOpenAI);
@@ -797,7 +792,7 @@ function renderRuntimeSettings(payload) {
     );
     setText(
         'registration-runtime-status',
-        `${registration.message || '自动注册工具状态正常。'} 当前默认注册 ${settings.registration_count ?? 1} 个账号，浏览器模式 ${settings.registration_browser_mode || 'headless'}，注册代理${settings.registration_proxy_url ? '已配置' : '未配置'}，邮箱 API Key${settings.registration_mail_api_key ? '已配置' : '未配置'}。`,
+        `${registration.message || '自动注册工具状态正常。'} Worker 执行参数请直接维护 register/config.json；qoder2api 仅负责注册任务与入池结果，不再同步或覆盖浏览器、代理、邮箱等配置。`,
     );
     renderRegistration(registration);
 
@@ -986,42 +981,6 @@ function openAuthUrl() {
         return;
     }
     state.popup = window.open(currentAuthUrl, 'qoder-browser-login');
-}
-
-async function saveRegistrationSettings(event) {
-    event.preventDefault();
-
-    const countValue = $('registration-count').value.trim();
-    const parsedCount = Number(countValue || '1');
-    const browserMode = $('registration-browser-mode').value || 'headless';
-    const proxyUrl = $('registration-proxy-url').value.trim();
-    const mailApiBase = $('registration-mail-api-base').value.trim();
-    const mailApiKey = $('registration-mail-api-key').value.trim();
-
-    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 500) {
-        showToast('本轮注册数量必须是 1 到 500 的整数', 'warning');
-        return;
-    }
-
-    $('registration-save-btn').disabled = true;
-    try {
-        const result = await apiRequest(SETTINGS_API, {
-            method: 'PUT',
-            body: JSON.stringify({
-                registration_count: parsedCount,
-                registration_browser_mode: browserMode,
-                registration_proxy_url: proxyUrl,
-                registration_mail_api_base: mailApiBase,
-                registration_mail_api_key: mailApiKey,
-            }),
-        });
-        renderRuntimeSettings(result);
-        showToast(result.message || '注册设置已保存', 'success');
-    } catch (error) {
-        showToast(error.message, 'error');
-    } finally {
-        $('registration-save-btn').disabled = false;
-    }
 }
 
 async function startRegistration() {
@@ -1318,7 +1277,6 @@ function bindEvents() {
     bindToggleSwitch('settings-default-stream-anthropic');
     bindToggleSwitch('settings-debug-logging-enabled');
     $('start-login-btn').addEventListener('click', startBrowserLogin);
-    $('registration-settings-form').addEventListener('submit', saveRegistrationSettings);
     $('open-auth-url-btn').addEventListener('click', openAuthUrl);
     $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);
     $('playground-form').addEventListener('submit', submitPlayground);

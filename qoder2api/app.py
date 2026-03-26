@@ -49,6 +49,7 @@ from .schemas import (
     AccountToggleRequest,
     ChatCompletionRequest,
     LoginSessionInputRequest,
+    RegistrationStartRequest,
     RuntimeSettingsUpdateRequest,
     StartBrowserLoginRequest,
     RegistrationWorkerProgressRequest,
@@ -733,8 +734,9 @@ async def webui_registration() -> dict[str, Any]:
 
 
 @app.post("/webui/api/registration/start")
-async def webui_start_registration() -> dict[str, Any]:
-    snapshot = get_registration_manager().start_registration(get_runtime_settings_manager().load())
+async def webui_start_registration(request: RegistrationStartRequest | None = None) -> dict[str, Any]:
+    requested_count = request.requested_count if request is not None else None
+    snapshot = get_registration_manager().start_registration(requested_count=requested_count)
     payload = _build_registration_payload()
     payload["session"] = snapshot.to_public_dict()
     payload["message"] = snapshot.message

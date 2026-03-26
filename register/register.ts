@@ -64,6 +64,12 @@ interface CliOptions {
   configFile?: string;
 }
 
+interface PageDebugSnapshot {
+  url: string;
+  title: string;
+  bodyPreview: string;
+}
+
 function stripJsonComments(input: string): string {
   let result = "";
   let inString = false;
@@ -237,6 +243,47 @@ const OUTPUT_FILE = path.isAbsolute(APP_CONFIG.outputFile || "")
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableNavigationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("ns_error_net_reset")
+    || normalized.includes("err_connection_reset")
+    || normalized.includes("err_proxy_connection_failed")
+    || normalized.includes("err_tunnel_connection_failed")
+    || normalized.includes("timeout")
+    || normalized.includes("net::")
+  );
+}
+
+async function gotoWithRetry(
+  page: Page,
+  url: string,
+  options: { timeout: number; attempts?: number },
+): Promise<void> {
+  const { timeout, attempts = 3 } = options;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableNavigationError(error) || attempt >= attempts) {
+        throw error;
+      }
+      const delayMs = 1500 * attempt;
+      log.warn(`打开页面失败，准备重试 (${attempt}/${attempts})`, {
+        url,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function isLinuxPlatform(): boolean {
@@ -592,16 +639,61 @@ async function doRegisterWithBrowser(
   tempToken: string,
 ): Promise<RegisterResult> {
   log.info("打开注册页面...");
-  await page.goto(QODER_SIGNUP_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await gotoWithRetry(page, QODER_SIGNUP_URL, { timeout: 30_000, attempts: 3 });
   await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
   await page.waitForTimeout(2000);
   await logBrowserFingerprint(page);
 
   log.info(`填写第一步: name=${firstName} ${lastName}, email=${email}`);
-  await page.locator("#basic_firstName").waitFor({ state: "visible", timeout: 10_000 });
-  await page.locator("#basic_firstName").fill(firstName);
-  await page.locator("#basic_lastName").fill(lastName);
-  await page.locator("#basic_email").fill(email);
+  const firstNameSelectors = [
+    "#basic_firstName",
+    'input[name="firstName"]',
+    'input[autocomplete="given-name"]',
+    'input[placeholder*="first" i]',
+    'input[aria-label*="first" i]',
+  ];
+  const lastNameSelectors = [
+    "#basic_lastName",
+    'input[name="lastName"]',
+    'input[autocomplete="family-name"]',
+    'input[placeholder*="last" i]',
+    'input[aria-label*="last" i]',
+  ];
+  const fullNameSelectors = [
+    'input[name="name"]',
+    'input[autocomplete="name"]',
+    'input[placeholder*="full name" i]',
+    'input[placeholder*="your name" i]',
+    'input[aria-label="name" i]',
+  ];
+  const emailSelectors = [
+    "#basic_email",
+    'input[name="email"]',
+    'input[type="email"]',
+    'input[autocomplete="email"]',
+    'input[placeholder*="email" i]',
+    'input[aria-label*="email" i]',
+  ];
+  const fieldTimeout = 25_000;
+
+  const firstNameSelector = await waitForAnyVisibleInput(page, firstNameSelectors, { timeout: fieldTimeout });
+  if (firstNameSelector) {
+    await page.locator(firstNameSelector).first().fill(firstName);
+    await fillVisibleInputBySelectors(page, lastNameSelectors, lastName, {
+      timeout: fieldTimeout,
+      label: "姓氏",
+    });
+  } else {
+    await fillVisibleInputBySelectors(page, fullNameSelectors, `${firstName} ${lastName}`, {
+      timeout: fieldTimeout,
+      label: "姓名",
+    });
+  }
+
+  await fillVisibleInputBySelectors(page, emailSelectors, email, {
+    timeout: fieldTimeout,
+    label: "邮箱",
+  });
 
   try {
     const checkbox = page.locator(".ant-checkbox-input").first();
@@ -810,6 +902,77 @@ async function doRegister(): Promise<{
 function printUsage(): void {
   console.log("Usage: npx tsx register.ts [--config PATH]");
   console.log("配置来源: 默认 register/config.json，也可通过 --config 或 QODERREG_CONFIG_FILE 覆盖");
+}
+
+async function collectPageDebugSnapshot(page: Page): Promise<PageDebugSnapshot> {
+  const url = page.url();
+  const title = await page.title().catch(() => "");
+  const bodyText = await page.evaluate(() => document.body?.innerText || "").catch(() => "");
+  return {
+    url,
+    title,
+    bodyPreview: bodyText.slice(0, 1000),
+  };
+}
+
+async function waitForAnyVisibleInput(
+  page: Page,
+  selectors: string[],
+  options: { timeout: number },
+): Promise<string | null> {
+  const { timeout } = options;
+  try {
+    await page.waitForFunction(
+      (candidateSelectors: string[]) => {
+        return candidateSelectors.some((selector) => {
+          const element = document.querySelector(selector) as HTMLInputElement | null;
+          if (!element) {
+            return false;
+          }
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0
+            && rect.height > 0
+            && style.display !== "none"
+            && style.visibility !== "hidden";
+        });
+      },
+      selectors,
+      { timeout },
+    );
+  } catch {
+    return null;
+  }
+
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    try {
+      if (await locator.isVisible()) {
+        return selector;
+      }
+    } catch {
+      // noop
+    }
+  }
+  return null;
+}
+
+async function fillVisibleInputBySelectors(
+  page: Page,
+  selectors: string[],
+  value: string,
+  options: { timeout: number; label: string },
+): Promise<string> {
+  const { timeout, label } = options;
+  const selector = await waitForAnyVisibleInput(page, selectors, { timeout });
+  if (!selector) {
+    const snapshot = await collectPageDebugSnapshot(page);
+    throw new Error(
+      `未找到可见的${label}输入框。当前 URL=${snapshot.url}，标题=${snapshot.title}，页面摘要=${snapshot.bodyPreview}`,
+    );
+  }
+  await page.locator(selector).first().fill(value);
+  return selector;
 }
 
 async function main(): Promise<void> {

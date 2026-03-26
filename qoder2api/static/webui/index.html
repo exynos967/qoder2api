@@ -251,38 +251,18 @@
                             <div class="card-body">
                                 <div class="registration-grid">
                                     <div class="registration-main">
-                                        <form id="registration-settings-form">
-                                            <div class="form-row responsive-row registration-settings-row">
-                                                <div class="form-group form-group-sm">
-                                                    <label for="registration-count">本轮注册数量</label>
-                                                    <input type="number" id="registration-count" min="1" max="20" placeholder="1">
-                                                </div>
-                                                <div class="form-group form-group-sm">
-                                                    <label for="registration-browser-mode">浏览器模式</label>
-                                                    <select id="registration-browser-mode">
-                                                        <option value="headless">headless</option>
-                                                        <option value="headed">headed</option>
-                                                        <option value="virtual">virtual</option>
-                                                    </select>
-                                                </div>
+                                        <div class="registration-standalone-note">
+                                            <div class="section-tag-row">
+                                                <span class="table-badge tone-muted">外部 Worker</span>
+                                                <span>register/config.json</span>
                                             </div>
-                                            <div class="form-group">
-                                                <label for="registration-proxy-url">注册代理</label>
-                                                <input type="text" id="registration-proxy-url" placeholder="留空则回退到全局代理设置">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="registration-mail-api-base">临时邮箱 API Base</label>
-                                                <input type="text" id="registration-mail-api-base" placeholder="https://maliapi.215.im/v1">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="registration-mail-api-key">临时邮箱 API Key</label>
-                                                <input type="password" id="registration-mail-api-key" placeholder="用于注册时拉取验证码邮件">
-                                            </div>
+                                            <p class="section-intro">
+                                                qoder2api 只负责创建注册任务、接收 Worker 回传结果并把账号入池；浏览器模式、代理、邮箱 API、注册数量等参数由外部 Worker 在
+                                                <span class="mono-inline">register/config.json</span>
+                                                中单独管理，不再在这里重复维护。
+                                            </p>
                                             <p id="registration-runtime-status" class="hint">加载中...</p>
-                                            <div class="actions-bar compact-actions">
-                                                <button type="submit" id="registration-save-btn" class="btn btn-primary"><span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg></span><span>保存注册设置</span></button>
-                                            </div>
-                                        </form>
+                                        </div>
                                     </div>
                                     <div class="registration-side">
                                         <div class="registration-meta-grid">
