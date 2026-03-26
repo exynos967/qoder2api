@@ -105,6 +105,7 @@ class RegistrationWorkerProgressRequest(BaseModel):
     line: str = ""
     status: str | None = None
     current_email: str | None = None
+    auth_url: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -114,6 +115,7 @@ class RegistrationWorkerCompleteRequest(BaseModel):
 
     email: str
     password: str = ""
+    summary: dict[str, Any] | None = None
 
     model_config = ConfigDict(extra="forbid")
 

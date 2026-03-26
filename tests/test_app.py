@@ -356,7 +356,7 @@ class _FakeRegistrationManager:
                 session_id='reg-1',
                 status='waiting_worker',
                 message='等待注册 Worker 处理第 1/1 个账号...',
-                auth_url='https://qoder.com/device/selectAccounts?challenge=demo',
+                auth_url=None,
                 started_at=1.0,
                 updated_at=2.0,
                 done=False,
@@ -398,7 +398,7 @@ class _FakeRegistrationManager:
         return type('Claim', (), {
             'to_dict': lambda self_: {
                 'session_id': 'reg-1',
-                'auth_url': 'https://qoder.com/device/selectAccounts?challenge=demo',
+                'auth_url': None,
                 'requested_count': 1,
                 'success_count': 0,
                 'failure_count': 0,
@@ -418,13 +418,13 @@ class _FakeRegistrationManager:
             raise QoderRegistrationError(f'找不到注册会话: {session_id}', status_code=404)
         return self.claim_current()
 
-    def append_worker_progress(self, session_id: str, *, line: str, status: str | None = None, current_email: str | None = None) -> RegistrationSessionSnapshot:
+    def append_worker_progress(self, session_id: str, *, line: str, status: str | None = None, current_email: str | None = None, auth_url: str | None = None) -> RegistrationSessionSnapshot:
         session = self.get_session(session_id).snapshot()
         self._session = RegistrationSessionSnapshot(
             session_id=session.session_id,
             status=status or session.status,
             message=session.message,
-            auth_url=session.auth_url,
+            auth_url=auth_url if auth_url is not None else session.auth_url,
             started_at=session.started_at,
             updated_at=session.updated_at + 1,
             done=session.done,
@@ -436,7 +436,7 @@ class _FakeRegistrationManager:
         )
         return self._session
 
-    def complete_worker_account(self, session_id: str, *, email: str, password: str = '') -> RegistrationSessionSnapshot:
+    def complete_worker_account(self, session_id: str, *, email: str, password: str = '', summary: dict[str, Any] | None = None) -> RegistrationSessionSnapshot:
         session = self.get_session(session_id).snapshot()
         self._session = RegistrationSessionSnapshot(
             session_id=session.session_id,
@@ -500,7 +500,7 @@ def test_webui_registration_routes(monkeypatch) -> None:
 
     fetched = asyncio.run(app_module.webui_get_registration_session('reg-1'))
     assert fetched['session_id'] == 'reg-1'
-    assert fetched['auth_url'] == 'https://qoder.com/device/selectAccounts?challenge=demo'
+    assert fetched['auth_url'] is None
 
     claimed = asyncio.run(app_module.webui_claim_registration_worker())
     assert claimed['session']['session_id'] == 'reg-1'
@@ -508,7 +508,7 @@ def test_webui_registration_routes(monkeypatch) -> None:
     progressed = asyncio.run(
         app_module.webui_registration_worker_progress(
             'reg-1',
-            app_module.RegistrationWorkerProgressRequest(line='worker alive', status='worker_running', current_email='demo@example.com'),
+            app_module.RegistrationWorkerProgressRequest(line='worker alive', status='worker_running', current_email='demo@example.com', auth_url='https://qoder.com/device/selectAccounts?challenge=demo'),
         )
     )
     assert 'worker alive' in progressed['terminal_output']
@@ -516,7 +516,7 @@ def test_webui_registration_routes(monkeypatch) -> None:
     completed = asyncio.run(
         app_module.webui_registration_worker_complete(
             'reg-1',
-            app_module.RegistrationWorkerCompleteRequest(email='demo@example.com', password='secret'),
+            app_module.RegistrationWorkerCompleteRequest(email='demo@example.com', password='secret', summary={'cached_user_info': {'uid': '1'}, 'device': {'machine_id': 'mid-1'}}),
         )
     )
     assert completed['status'] == 'success'
@@ -548,7 +548,7 @@ def test_webui_registration_routes(monkeypatch) -> None:
         session_id='reg-1',
         status='registering',
         message='正在注册第 1/1 个账号...',
-        auth_url='https://qoder.com/device/selectAccounts?challenge=demo',
+        auth_url=None,
         started_at=1.0,
         updated_at=2.0,
         done=False,

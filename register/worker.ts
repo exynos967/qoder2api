@@ -12,6 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'config.json');
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_CALLBACK_TIMEOUT_SECONDS = 180;
+const DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS = 300;
 
 interface WorkerAppConfig {
   backendUrl?: string;
@@ -22,6 +23,9 @@ interface WorkerAppConfig {
   proxy?: string | null;
   mailApiBase?: string;
   mailApiKey?: string;
+  pythonExecutable?: string;
+  pureLoginScript?: string;
+  pureLoginTimeoutSeconds?: number;
 }
 
 type RegisterRuntimeSettings = {
@@ -33,7 +37,7 @@ type RegisterRuntimeSettings = {
 
 interface WorkerClaimPayload {
   session_id: string;
-  auth_url: string;
+  auth_url?: string | null;
   requested_count: number;
   success_count: number;
   failure_count: number;
@@ -54,6 +58,21 @@ interface StoredAccountRecord {
   email: string;
   password: string;
   cookies?: unknown[];
+}
+
+interface PureLoginReadyPayload {
+  loginUrl: string;
+  workDir: string;
+  summaryPath: string;
+  machineId: string;
+  machineToken: string;
+  machineType: string;
+}
+
+interface PureLoginHandle {
+  ready: Promise<PureLoginReadyPayload>;
+  result: Promise<Record<string, unknown>>;
+  terminate: () => void;
 }
 
 function stripJsonComments(input: string): string {
@@ -189,6 +208,30 @@ function resolveAutoStart(config: WorkerAppConfig): boolean {
   return config.autoStart !== false;
 }
 
+function resolvePythonExecutable(config: WorkerAppConfig): string {
+  const candidate = (config.pythonExecutable || process.env.QODERREG_PYTHON || '').trim();
+  return candidate || 'python3';
+}
+
+function resolvePureLoginScript(config: WorkerAppConfig): string {
+  const candidates = [
+    (config.pureLoginScript || '').trim(),
+    (process.env.QODERREG_PURE_LOGIN_SCRIPT || '').trim(),
+    path.resolve(__dirname, '..', '..', '..', 'machine', 'qoder-machine', 'xieyi', 'qoder_pure_login.py'),
+    '/root/workdir/qoder/machine/qoder-machine/xieyi/qoder_pure_login.py',
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate);
+    if (existsSync(resolved)) {
+      return resolved;
+    }
+  }
+  throw new Error(
+    '找不到 qoder_pure_login.py，请在 config.json.pureLoginScript 或 QODERREG_PURE_LOGIN_SCRIPT 中指定脚本路径',
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -252,6 +295,7 @@ async function sendProgress(
   line: string,
   status?: string,
   currentEmail?: string,
+  authUrl?: string,
 ): Promise<void> {
   await apiRequest<Record<string, unknown>>(
     backendUrl,
@@ -262,6 +306,7 @@ async function sendProgress(
         line,
         status,
         current_email: currentEmail,
+        auth_url: authUrl,
       }),
     },
   );
@@ -272,15 +317,208 @@ async function sendComplete(
   sessionId: string,
   email: string,
   password: string,
+  summary?: Record<string, unknown>,
 ): Promise<void> {
   await apiRequest<Record<string, unknown>>(
     backendUrl,
     `/webui/api/registration/sessions/${sessionId}/worker/complete`,
     {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, summary }),
     },
   );
+}
+
+function parseLastJsonObject(text: string): Record<string, unknown> | null {
+  const decoder = JSON;
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  for (let index = trimmed.length - 1; index >= 0; index -= 1) {
+    if (trimmed[index] !== '{') {
+      continue;
+    }
+    const candidate = trimmed.slice(index);
+    try {
+      const payload = decoder.parse(candidate) as Record<string, unknown>;
+      if (payload && typeof payload === 'object') {
+        return payload;
+      }
+    } catch {
+      // noop
+    }
+  }
+  return null;
+}
+
+function startPureLogin(
+  config: WorkerAppConfig,
+  tempDir: string,
+  onLine: (line: string) => Promise<void>,
+): PureLoginHandle {
+  const pureLoginScript = resolvePureLoginScript(config);
+  const pythonExecutable = resolvePythonExecutable(config);
+  const outputRoot = path.join(tempDir, 'pure-login-output');
+  const timeoutSeconds = Math.max(
+    DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+    Number.parseInt(String(config.pureLoginTimeoutSeconds ?? DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS), 10)
+      || DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS,
+  );
+  const child = spawn(
+    pythonExecutable,
+    [
+      pureLoginScript,
+      '--count',
+      '1',
+      '--timeout',
+      String(timeoutSeconds),
+      '--json',
+      '--output-root',
+      outputRoot,
+    ],
+    {
+      cwd: path.dirname(pureLoginScript),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+
+  let stdoutBuffer = '';
+  let stderrBuffer = '';
+  let combinedOutput = '';
+  let loginUrl = '';
+  let workDir = '';
+  let machineId = '';
+  let machineToken = '';
+  let machineType = '';
+  let readyResolved = false;
+
+  let readyResolve!: (payload: PureLoginReadyPayload) => void;
+  let readyReject!: (error: Error) => void;
+  const ready = new Promise<PureLoginReadyPayload>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+
+  const maybeResolveReady = (): void => {
+    if (readyResolved || !loginUrl || !workDir) {
+      return;
+    }
+    readyResolved = true;
+    readyResolve({
+      loginUrl,
+      workDir,
+      summaryPath: path.join(path.dirname(workDir), 'summary.json'),
+      machineId,
+      machineToken,
+      machineType,
+    });
+  };
+
+  const handleLine = async (prefix: string, rawLine: string): Promise<void> => {
+    const normalized = rawLine.trim();
+    if (!normalized) {
+      return;
+    }
+    combinedOutput += `${normalized}\n`;
+    if (!prefix) {
+      if (normalized.startsWith('LOGIN_URL=')) {
+        loginUrl = normalized.slice('LOGIN_URL='.length).trim();
+      } else if (normalized.startsWith('WORK_DIR=')) {
+        workDir = normalized.slice('WORK_DIR='.length).trim();
+      } else if (normalized.startsWith('LOGIN_MACHINE_ID=')) {
+        machineId = normalized.slice('LOGIN_MACHINE_ID='.length).trim();
+      } else if (normalized.startsWith('MACHINE_TOKEN=')) {
+        machineToken = normalized.slice('MACHINE_TOKEN='.length).trim();
+      } else if (normalized.startsWith('MACHINE_TYPE=')) {
+        machineType = normalized.slice('MACHINE_TYPE='.length).trim();
+      }
+      maybeResolveReady();
+    }
+    await onLine(`${prefix}${normalized}`);
+  };
+
+  const pump = (prefix: string, stream: NodeJS.ReadableStream | null, currentBufferRef: { value: string }): void => {
+    stream?.on('data', (chunk: Buffer) => {
+      void (async () => {
+        const merged = currentBufferRef.value + chunk.toString('utf8');
+        const lines = merged.split(/\r?\n/);
+        currentBufferRef.value = lines.pop() || '';
+        for (const line of lines) {
+          await handleLine(prefix, line);
+        }
+      })().catch((error) => {
+        readyReject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  };
+
+  pump('', child.stdout, { get value() { return stdoutBuffer; }, set value(v: string) { stdoutBuffer = v; } });
+  pump('[pure-login][stderr] ', child.stderr, { get value() { return stderrBuffer; }, set value(v: string) { stderrBuffer = v; } });
+
+  const result = new Promise<Record<string, unknown>>((resolve, reject) => {
+    child.on('error', (error) => {
+      if (!readyResolved) {
+        readyReject(error);
+      }
+      reject(error);
+    });
+    child.on('close', (code) => {
+      void (async () => {
+        if (stdoutBuffer.trim()) {
+          await handleLine('', stdoutBuffer);
+        }
+        if (stderrBuffer.trim()) {
+          await handleLine('[pure-login][stderr] ', stderrBuffer);
+        }
+        if (code !== 0) {
+          const error = new Error(`qoder_pure_login.py 退出码异常: ${code ?? -1}`);
+          if (!readyResolved) {
+            readyReject(error);
+          }
+          reject(error);
+          return;
+        }
+        const summaryPath = workDir ? path.join(path.dirname(workDir), 'summary.json') : '';
+        if (summaryPath && existsSync(summaryPath)) {
+          const raw = await readFile(summaryPath, 'utf8');
+          resolve(JSON.parse(raw) as Record<string, unknown>);
+          return;
+        }
+        const fallback = parseLastJsonObject(combinedOutput);
+        if (fallback) {
+          resolve(fallback);
+          return;
+        }
+        reject(new Error('纯协议登录结束后未找到 summary.json'));
+      })().catch((error) => {
+        if (!readyResolved) {
+          readyReject(error instanceof Error ? error : new Error(String(error)));
+        }
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  });
+
+  const readyTimeout = setTimeout(() => {
+    if (!readyResolved) {
+      readyReject(new Error('等待 qoder_pure_login.py 输出 LOGIN_URL 超时'));
+      child.kill('SIGTERM');
+    }
+  }, Math.min(timeoutSeconds, 120) * 1000);
+  void ready.finally(() => clearTimeout(readyTimeout));
+  void result.finally(() => clearTimeout(readyTimeout));
+
+  return {
+    ready,
+    result,
+    terminate: () => {
+      if (!child.killed) {
+        child.kill('SIGTERM');
+      }
+    },
+  };
 }
 
 async function sendFailure(backendUrl: string, sessionId: string, message: string): Promise<void> {
@@ -390,7 +628,11 @@ async function runProcess(
   });
 }
 
-async function runClaim(backendUrl: string, claim: WorkerClaimPayload): Promise<void> {
+async function runClaim(
+  backendUrl: string,
+  claim: WorkerClaimPayload,
+  appConfig: WorkerAppConfig,
+): Promise<void> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'qoder2api-register-'));
   const tsxPath = path.join(__dirname, 'node_modules', '.bin', 'tsx');
   if (!existsSync(tsxPath)) {
@@ -416,27 +658,48 @@ async function runClaim(backendUrl: string, claim: WorkerClaimPayload): Promise<
       backendUrl,
       claim.session_id,
       `注册成功：${account.email}`,
-      'oauth_signing_in',
+      'preparing_oauth',
       account.email,
     );
-    await runProcess(
-      tsxPath,
-      [
-        'login.ts',
-        account.email,
-        '--target-url',
-        claim.auth_url,
-        '--callback-timeout',
-        String(DEFAULT_CALLBACK_TIMEOUT_SECONDS),
-        '--config',
-        configPath,
-      ],
-      {
-        cwd: __dirname,
-        onLine: (line) => sendProgress(backendUrl, claim.session_id, `[oauth] ${line}`, 'oauth_signing_in', account.email),
-      },
+    const pureLogin = startPureLogin(
+      appConfig,
+      tempDir,
+      (line) => sendProgress(backendUrl, claim.session_id, line, 'preparing_oauth', account.email),
     );
-    await sendComplete(backendUrl, claim.session_id, account.email, account.password || '');
+
+    try {
+      const ready = await pureLogin.ready;
+      await sendProgress(
+        backendUrl,
+        claim.session_id,
+        `已生成 OAuth 链接：${ready.loginUrl}`,
+        'oauth_signing_in',
+        account.email,
+        ready.loginUrl,
+      );
+      await runProcess(
+        tsxPath,
+        [
+          'login.ts',
+          account.email,
+          '--target-url',
+          ready.loginUrl,
+          '--callback-timeout',
+          String(DEFAULT_CALLBACK_TIMEOUT_SECONDS),
+          '--config',
+          configPath,
+        ],
+        {
+          cwd: __dirname,
+          onLine: (line) => sendProgress(backendUrl, claim.session_id, `[oauth] ${line}`, 'oauth_signing_in', account.email, ready.loginUrl),
+        },
+      );
+      const summary = await pureLogin.result;
+      await sendComplete(backendUrl, claim.session_id, account.email, account.password || '', summary);
+    } catch (error) {
+      pureLogin.terminate();
+      throw error;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await sendFailure(backendUrl, claim.session_id, message).catch(() => undefined);
@@ -498,7 +761,7 @@ async function main(): Promise<void> {
 
     log.info(`已领取会话 ${claim.session_id}，开始处理第 ${claim.current_index}/${claim.requested_count} 个账号`);
     try {
-      await runClaim(backendUrl, claim);
+      await runClaim(backendUrl, claim, appConfig);
       log.info(`会话 ${claim.session_id} 当前轮次已完成。`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

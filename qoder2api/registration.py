@@ -6,16 +6,21 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
+from .account_status import persist_summary_account_status, refresh_account_status
 from .accounts import create_pending_managed_account, finalize_pending_account, remove_account
-from .login import BrowserLoginSnapshot, QoderLoginManager
+from .auth_state import CachedUserInfo, ensure_auth_dir, save_cached_user_info, save_machine_id
+from .login import QoderLoginManager
 from .runtime_settings import RuntimeSettingsSnapshot
 from .settings import Settings
 
 _SESSION_TTL_SECONDS = 15 * 60
 _OUTPUT_LIMIT = 24_000
+_AUTH_URL_UNSET = object()
+_CURRENT_EMAIL_UNSET = object()
 
 
 class QoderRegistrationError(RuntimeError):
@@ -68,7 +73,7 @@ class RegistrationSessionSnapshot:
 @dataclass(slots=True)
 class RegistrationWorkerClaim:
     session_id: str
-    auth_url: str
+    auth_url: str | None
     requested_count: int
     success_count: int
     failure_count: int
@@ -145,8 +150,6 @@ class RegistrationSession:
         self.session_id = uuid.uuid4().hex
         self._lock = threading.RLock()
         self._cancelled = False
-        self._current_account_id: str | None = None
-        self._current_browser_session_id: str | None = None
 
         started_at = time.time()
         self._snapshot = RegistrationSessionSnapshot(
@@ -180,8 +183,6 @@ class RegistrationSession:
         snapshot = self.snapshot()
         if snapshot.done:
             raise QoderRegistrationError("注册会话已结束", status_code=409)
-        if not snapshot.auth_url or self._current_browser_session_id is None:
-            raise QoderRegistrationError("当前没有可处理的注册任务", status_code=409)
 
         current_index = snapshot.success_count + snapshot.failure_count + 1
         self._update_snapshot(
@@ -209,6 +210,7 @@ class RegistrationSession:
         line: str,
         status: str | None = None,
         current_email: str | None = None,
+        auth_url: str | None = None,
     ) -> RegistrationSessionSnapshot:
         if line:
             terminal_output = self._append_output_line(line)
@@ -218,43 +220,23 @@ class RegistrationSession:
             status=status,
             terminal_output=terminal_output,
             current_email=current_email,
+            auth_url=auth_url,
         )
         return self.snapshot()
 
-    def complete_current_account(self, *, email: str, password: str = "") -> RegistrationSessionSnapshot:
+    def complete_current_account(
+        self,
+        *,
+        email: str,
+        password: str = "",
+        summary: Mapping[str, Any] | None = None,
+    ) -> RegistrationSessionSnapshot:
         del password
-        if self._current_account_id is None or self._current_browser_session_id is None:
-            raise QoderRegistrationError("当前没有待完成的 OAuth 任务", status_code=409)
-
-        self._update_snapshot(
-            status="waiting_qoder_login",
-            message=f"正在等待 Qoder OAuth 回写登录态：{email}",
-            current_email=email,
-            terminal_output=self._append_output_line(f"注册 Worker 已完成 OAuth，等待 Qoder 会话收敛：{email}"),
+        imported_account = import_external_worker_account(
+            self.settings,
+            email=email,
+            summary=summary,
         )
-
-        browser_snapshot = self._wait_browser_session(self._current_browser_session_id)
-        current_account_id = self._current_account_id
-        self._current_account_id = None
-        self._current_browser_session_id = None
-
-        if browser_snapshot.status != "success":
-            remove_account(self.settings, current_account_id)
-            with self._lock:
-                self._snapshot.failure_count += 1
-            self._update_snapshot(
-                status="error",
-                message=browser_snapshot.message or "OAuth 入池失败",
-                auth_url=None,
-                done=True,
-                terminal_output=self._append_output_line(browser_snapshot.message or "OAuth 入池失败"),
-            )
-            return self.snapshot()
-
-        try:
-            finalize_pending_account(self.settings, current_account_id)
-        except KeyError as exc:
-            raise QoderRegistrationError("待入池账号不存在，无法完成注册流程", status_code=500, error_type="api_error") from exc
 
         with self._lock:
             self._snapshot.success_count += 1
@@ -266,7 +248,9 @@ class RegistrationSession:
                 message=f"自动注册完成：成功 {self.snapshot().success_count} 个账号",
                 auth_url=None,
                 done=True,
-                terminal_output=self._append_output_line(f"账号已成功入池：{email}"),
+                terminal_output=self._append_output_line(
+                    f"账号已成功入池：{email} ({imported_account.id})"
+                ),
             )
             return self.snapshot()
 
@@ -274,13 +258,12 @@ class RegistrationSession:
             status="ready",
             message=f"账号已入池：{email}，准备下一轮...",
             auth_url=None,
-            terminal_output=self._append_output_line(f"账号已成功入池：{email}"),
+            terminal_output=self._append_output_line(f"账号已成功入池：{email} ({imported_account.id})"),
         )
         self._prepare_next_account()
         return self.snapshot()
 
     def fail_current_account(self, message: str) -> RegistrationSessionSnapshot:
-        self._cleanup_current_resources(cancel_browser=True)
         with self._lock:
             self._snapshot.failure_count += 1
         self._update_snapshot(
@@ -294,7 +277,6 @@ class RegistrationSession:
 
     def cancel(self) -> RegistrationSessionSnapshot:
         self._cancelled = True
-        self._cleanup_current_resources(cancel_browser=True)
         self._update_snapshot(
             status="cancelled",
             message="自动注册已取消",
@@ -311,68 +293,14 @@ class RegistrationSession:
         position = self.snapshot().success_count + self.snapshot().failure_count + 1
         total = self.snapshot().requested_count
         self._update_snapshot(
-            status="starting_browser_login",
-            message=f"正在为第 {position}/{total} 个账号创建 OAuth 链接...",
-            terminal_output=self._append_output_line(f"开始处理第 {position}/{total} 个账号。"),
+            status="waiting_worker",
+            message=f"等待外部注册 Worker 处理第 {position}/{total} 个账号...",
+            auth_url=None,
+            terminal_output=self._append_output_line(
+                f"开始处理第 {position}/{total} 个账号，等待外部 Worker 生成 OAuth 链接并回传结果。"
+            ),
             current_email=None,
         )
-        pending_account = create_pending_managed_account(self.settings, label="")
-        browser_snapshot = self.login_manager.start_browser_login(
-            qoder_home=pending_account.qoder_home_path,
-            on_finished=None,
-        )
-        auth_url = (browser_snapshot.auth_url or "").strip()
-        if not auth_url:
-            remove_account(self.settings, pending_account.id)
-            raise QoderRegistrationError("未能生成 OAuth 链接", status_code=502, error_type="api_error")
-
-        self._current_account_id = pending_account.id
-        self._current_browser_session_id = browser_snapshot.session_id
-        self._update_snapshot(
-            status="waiting_worker",
-            message=f"等待注册 Worker 处理第 {position}/{total} 个账号...",
-            auth_url=auth_url,
-            terminal_output=self._append_output_line(f"已生成 OAuth 链接：{auth_url}"),
-        )
-
-    def _cleanup_current_resources(self, *, cancel_browser: bool) -> None:
-        account_id = self._current_account_id
-        browser_session_id = self._current_browser_session_id
-        self._current_account_id = None
-        self._current_browser_session_id = None
-
-        if cancel_browser and browser_session_id:
-            try:
-                browser_snapshot = self.login_manager.get_session(browser_session_id).snapshot()
-            except Exception:
-                browser_snapshot = None
-            if browser_snapshot is not None and not browser_snapshot.done:
-                try:
-                    self.login_manager.cancel(browser_session_id)
-                except Exception:
-                    pass
-        if account_id:
-            remove_account(self.settings, account_id)
-
-    def _wait_browser_session(self, session_id: str) -> BrowserLoginSnapshot:
-        deadline = time.monotonic() + max(60, self.settings.namespaced_login_timeout_seconds + 30)
-        last_output = ""
-        while time.monotonic() < deadline:
-            if self._cancelled:
-                raise QoderRegistrationError("自动注册已取消", status_code=409, error_type="cancelled")
-            snapshot = self.login_manager.get_session(session_id).snapshot()
-            current_output = snapshot.terminal_output or ""
-            if current_output and current_output != last_output:
-                new_text = current_output[len(last_output):].lstrip("\n") if current_output.startswith(last_output) else current_output
-                for line in new_text.splitlines():
-                    self._update_snapshot(terminal_output=self._append_output_line(f"[oauth-session] {line}"))
-                last_output = current_output
-            if snapshot.auth_url:
-                self._update_snapshot(auth_url=snapshot.auth_url)
-            if snapshot.done:
-                return snapshot
-            time.sleep(0.5)
-        raise QoderRegistrationError("等待 OAuth 会话完成超时", status_code=504, error_type="timeout_error")
 
     def _append_output_line(self, line: str) -> str:
         current = self.snapshot().terminal_output
@@ -384,25 +312,96 @@ class RegistrationSession:
         *,
         status: str | None = None,
         message: str | None = None,
-        auth_url: str | None = None,
+        auth_url: str | None | object = _AUTH_URL_UNSET,
         terminal_output: str | None = None,
         done: bool | None = None,
-        current_email: str | None = None,
+        current_email: str | None | object = _CURRENT_EMAIL_UNSET,
     ) -> None:
         with self._lock:
             if status is not None:
                 self._snapshot.status = status
             if message is not None:
                 self._snapshot.message = message
-            if auth_url is not None:
-                self._snapshot.auth_url = auth_url
+            if auth_url is not _AUTH_URL_UNSET:
+                self._snapshot.auth_url = auth_url if isinstance(auth_url, str) or auth_url is None else self._snapshot.auth_url
             if terminal_output is not None:
                 self._snapshot.terminal_output = _trim_tail(terminal_output, limit=self.output_limit)
             if done is not None:
                 self._snapshot.done = done
-            if current_email is not None:
-                self._snapshot.current_email = current_email
+            if current_email is not _CURRENT_EMAIL_UNSET:
+                self._snapshot.current_email = current_email if isinstance(current_email, str) or current_email is None else self._snapshot.current_email
             self._snapshot.updated_at = time.time()
+
+
+def _build_external_device_metadata(summary: Mapping[str, Any], *, machine_id: str) -> dict[str, str]:
+    device = summary.get("device") if isinstance(summary.get("device"), Mapping) else {}
+    device_info = device.get("machine_info") if isinstance(device, Mapping) else {}
+    output_dir = str(summary.get("outputDir") or "").strip()
+    return {
+        "workflow": "pure_protocol_external",
+        "output_dir": output_dir,
+        "summary_path": str(Path(output_dir) / "summary.json") if output_dir else "",
+        "machine_id": machine_id,
+        "machine_token": str(device_info.get("machineToken") or "").strip(),
+        "machine_type": str(device_info.get("machineType") or "").strip(),
+        "hostname": str(device.get("hostname") or "").strip(),
+        "mac": str(device.get("mac") or "").strip(),
+    }
+
+
+def import_external_worker_account(
+    settings: Settings,
+    *,
+    email: str,
+    summary: Mapping[str, Any] | None,
+):
+    if not isinstance(summary, Mapping):
+        raise QoderRegistrationError("外部 Worker 未回传 summary，无法导入账号", status_code=502, error_type="api_error")
+    cached_payload = summary.get("cached_user_info")
+    if not isinstance(cached_payload, Mapping):
+        raise QoderRegistrationError("外部 Worker 回传 summary 缺少 cached_user_info", status_code=502, error_type="api_error")
+
+    try:
+        info = CachedUserInfo.model_validate(cached_payload)
+    except Exception as exc:
+        raise QoderRegistrationError(f"解析 cached_user_info 失败: {exc}", status_code=502, error_type="api_error") from exc
+
+    device = summary.get("device") if isinstance(summary.get("device"), Mapping) else {}
+    machine_id = str(device.get("machine_id") or info.login_device_id or "").strip()
+    if not machine_id:
+        raise QoderRegistrationError("外部 Worker 回传 summary 缺少 machine_id", status_code=502, error_type="api_error")
+    if len(machine_id) < 16:
+        raise QoderRegistrationError(
+            "外部 Worker 回传的 machine_id 长度不足 16，无法导入账号",
+            status_code=502,
+            error_type="api_error",
+        )
+
+    if not info.email:
+        info.email = email
+    if not info.login_device_id:
+        info.login_device_id = machine_id
+
+    account = create_pending_managed_account(settings, label=email)
+    qoder_home = account.qoder_home_path
+    try:
+        save_machine_id(qoder_home, machine_id)
+        save_cached_user_info(qoder_home, info)
+        metadata = _build_external_device_metadata(summary, machine_id=machine_id)
+        auth_dir = ensure_auth_dir(qoder_home)
+        (auth_dir / "xieyi_device.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        persist_summary_account_status(qoder_home, summary)
+        try:
+            refresh_account_status(settings, qoder_home)
+        except Exception:
+            pass
+        return finalize_pending_account(settings, account.id)
+    except Exception:
+        remove_account(settings, account.id)
+        raise
 
 
 class QoderRegistrationManager:
@@ -455,9 +454,6 @@ class QoderRegistrationManager:
             current = self.current_session()
             if current is not None and not current.done:
                 return current
-            browser_session = self.login_manager.current_session()
-            if browser_session is not None and not browser_session.done:
-                raise QoderRegistrationError("当前已有进行中的 OAuth 会话，请先完成或取消后再试", status_code=409)
             session = RegistrationSession(
                 settings=self.settings,
                 runtime_snapshot=runtime_snapshot,
@@ -495,15 +491,24 @@ class QoderRegistrationManager:
         line: str,
         status: str | None = None,
         current_email: str | None = None,
+        auth_url: str | None = None,
     ) -> RegistrationSessionSnapshot:
         return self.get_session(session_id).append_worker_progress(
             line=line,
             status=status,
             current_email=current_email,
+            auth_url=auth_url,
         )
 
-    def complete_worker_account(self, session_id: str, *, email: str, password: str = "") -> RegistrationSessionSnapshot:
-        return self.get_session(session_id).complete_current_account(email=email, password=password)
+    def complete_worker_account(
+        self,
+        session_id: str,
+        *,
+        email: str,
+        password: str = "",
+        summary: Mapping[str, Any] | None = None,
+    ) -> RegistrationSessionSnapshot:
+        return self.get_session(session_id).complete_current_account(email=email, password=password, summary=summary)
 
     def fail_worker(self, session_id: str, *, message: str) -> RegistrationSessionSnapshot:
         return self.get_session(session_id).fail_current_account(message)

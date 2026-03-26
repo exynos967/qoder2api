@@ -772,6 +772,7 @@ async def webui_registration_worker_progress(
         line=request.line,
         status=request.status,
         current_email=request.current_email,
+        auth_url=request.auth_url,
     )
     return snapshot.to_public_dict()
 
@@ -785,6 +786,7 @@ async def webui_registration_worker_complete(
         session_id,
         email=request.email,
         password=request.password,
+        summary=request.summary,
     )
     return snapshot.to_public_dict()
 

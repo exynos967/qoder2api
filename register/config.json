@@ -7,6 +7,12 @@
   "pollIntervalSeconds": 5,
   // 自动创建任务时的注册数量
   "count": 1,
+  // Python 可执行文件
+  "pythonExecutable": "python3",
+  // machine 侧纯协议登录脚本路径（worker 本机执行）
+  "pureLoginScript": "/root/workdir/qoder/machine/qoder-machine/xieyi/qoder_pure_login.py",
+  // 外部纯协议登录超时（秒）
+  "pureLoginTimeoutSeconds": 300,
   // Camoufox 模式：headed / virtual / headless
   "browserMode": "headless",
   // 浏览器 locale
@@ -19,6 +25,6 @@
   "mailApiBase": "https://maliapi.215.im/v1",
   // 临时邮箱 API Key（请自行填写）
   "mailApiKey": "",
-  // 输出文件路径（通常由 qoder2api 运行时覆盖）
+  // 输出文件路径（通常由 worker 运行时覆盖）
   "outputFile": "accounts.json"
 }
