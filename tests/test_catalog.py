@@ -72,3 +72,40 @@ def test_fallback_models_expose_claude_opus_display_name(tmp_path) -> None:
 
     assert ultimate.display_name == "claude-opus-4-6"
     assert ultimate.public_id == "claude-opus-4-6"
+
+def test_public_id_override_for_performance(tmp_path) -> None:
+    qoder_home = tmp_path / ".qoder"
+    auth_dir = qoder_home / ".auth"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "models").write_text(
+        json.dumps(
+            {
+                "chat": [
+                    {
+                        "key": "performance",
+                        "display_name": "Performance",
+                        "max_input_tokens": 180000,
+                        "max_output_tokens": 32768,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    models = load_qoder_models(qoder_home)
+
+    assert len(models) == 1
+    assert models[0].id == "performance"
+    assert models[0].display_name == "claude-sonnet-4-6"
+    assert models[0].public_id == "claude-sonnet-4-6"
+    assert resolve_model_name("claude-sonnet-4-6", models, "auto") == "performance"
+
+def test_fallback_models_expose_claude_sonnet_display_name(tmp_path) -> None:
+    models = load_qoder_models(tmp_path / ".qoder")
+
+    performance = next(model for model in models if model.id == "performance")
+
+    assert performance.display_name == "claude-sonnet-4-6"
+    assert performance.public_id == "claude-sonnet-4-6"
+
