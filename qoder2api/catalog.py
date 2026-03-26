@@ -26,7 +26,7 @@ class QoderModelInfo:
         return _normalize_public_id(self.id, self.display_name)
 
 
-_DISPLAY_NAME_OVERRIDES = {"mmodel": "MiniMax-M2.7"}
+_DISPLAY_NAME_OVERRIDES = {"ultimate": "claude-opus-4-6", "mmodel": "MiniMax-M2.7"}
 _PUBLIC_ID_OVERRIDES = {"ultimate": "claude-opus-4-6", "mmodel": "MiniMax-M2.7"}
 
 
@@ -43,7 +43,7 @@ def _normalize_public_id(model_id: str, display_name: str) -> str:
 
 _FALLBACK_MODELS = [
     QoderModelInfo(id="auto", display_name="Auto", scene="chat", is_default=True, is_vl=True, price_factor=1.0),
-    QoderModelInfo(id="ultimate", display_name="Ultimate", scene="chat", is_reasoning=True, is_vl=True, price_factor=1.6),
+    QoderModelInfo(id="ultimate", display_name="claude-opus-4-6", scene="chat", is_reasoning=True, is_vl=True, price_factor=1.6),
     QoderModelInfo(id="performance", display_name="Performance", scene="chat", is_vl=True, price_factor=1.1),
     QoderModelInfo(id="efficient", display_name="Efficient", scene="chat", is_vl=True, price_factor=0.3),
     QoderModelInfo(id="lite", display_name="Lite", scene="chat", is_vl=False, price_factor=0.0),

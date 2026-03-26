@@ -60,6 +60,15 @@ def test_public_id_override_for_ultimate(tmp_path) -> None:
 
     assert len(models) == 1
     assert models[0].id == "ultimate"
-    assert models[0].display_name == "Ultimate"
+    assert models[0].display_name == "claude-opus-4-6"
     assert models[0].public_id == "claude-opus-4-6"
     assert resolve_model_name("claude-opus-4-6", models, "auto") == "ultimate"
+
+
+def test_fallback_models_expose_claude_opus_display_name(tmp_path) -> None:
+    models = load_qoder_models(tmp_path / ".qoder")
+
+    ultimate = next(model for model in models if model.id == "ultimate")
+
+    assert ultimate.display_name == "claude-opus-4-6"
+    assert ultimate.public_id == "claude-opus-4-6"
