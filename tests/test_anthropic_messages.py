@@ -492,6 +492,7 @@ def test_anthropic_stream_translator_emits_tool_use_events() -> None:
         "type": "tool_use",
         "id": "call_1",
         "name": "get_weather",
+        "input": {},
     }
     assert pairs[2][1]["delta"] == {
         "type": "input_json_delta",

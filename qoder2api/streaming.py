@@ -261,8 +261,6 @@ def _merge_chunk_text(current: str, chunk: str) -> str:
         return current
     if not current:
         return chunk
-    if current.endswith(chunk):
-        return current
     return current + chunk
 
 
