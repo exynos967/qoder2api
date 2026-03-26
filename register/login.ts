@@ -8,6 +8,7 @@ import { Camoufox } from "camoufox-js";
 import type { BrowserContext, Page } from "playwright-core";
 
 import { solveCaptcha } from "./captchaSolver";
+import { attachDebugRecorder } from "./debug";
 import { log } from "./utils/logger";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,8 @@ interface AppConfig {
   locale?: string;
   languages?: string[] | string;
   proxy?: ProxyConfig | null;
+  debugMode?: boolean;
+  debugDir?: string;
   outputFile?: string;
 }
 
@@ -567,34 +570,99 @@ async function openOauthTarget(page: Page, targetUrl: string): Promise<void> {
   await waitForPageStable(page);
 }
 
+async function trySelectOauthAccount(page: Page, email: string): Promise<boolean> {
+  if (!page.url().includes("/device/selectAccounts")) {
+    return false;
+  }
+
+  const candidates = [
+    page.locator("button").filter({ hasText: email }).first(),
+    page.locator('[role="button"]').filter({ hasText: email }).first(),
+    page.locator("label").filter({ hasText: email }).first(),
+    page.locator('[role="option"]').filter({ hasText: email }).first(),
+    page.locator(".ant-list-item").filter({ hasText: email }).first(),
+    page.locator(".ant-card").filter({ hasText: email }).first(),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if (!(await candidate.isVisible())) {
+        continue;
+      }
+      await candidate.click();
+      await waitForPageStable(page);
+      log.info("检测到 OAuth 选账号页，已尝试点击匹配当前邮箱的账号项", { email });
+      return true;
+    } catch {
+      // noop
+    }
+  }
+
+  const fallbackCandidates = [
+    page.locator('[role="option"]').first(),
+    page.locator("label").first(),
+    page.locator(".ant-list-item").first(),
+    page.locator(".ant-card").first(),
+  ];
+
+  for (const candidate of fallbackCandidates) {
+    try {
+      if (!(await candidate.isVisible())) {
+        continue;
+      }
+      await candidate.click();
+      await waitForPageStable(page);
+      log.warn("检测到 OAuth 选账号页，未匹配到邮箱，已尝试点击第一个可选账号项", { email });
+      return true;
+    } catch {
+      // noop
+    }
+  }
+
+  return false;
+}
+
 function isLocalCallbackUrl(url: string): boolean {
   return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(url);
 }
 
 async function tryApproveOauth(page: Page): Promise<boolean> {
-  const button = page.locator('button').filter({
-    hasText: /Authorize|Allow|Continue|Open App|Open application|同意|授权|继续/i,
-  }).first();
-  try {
-    if (!(await button.isVisible())) {
-      return false;
+  const candidates = [
+    page.locator("button").filter({
+      hasText: /Authorize|Allow|Continue|Open App|Open application|同意|授权|继\s*续/i,
+    }).first(),
+    page.locator('button.ant-btn-primary').first(),
+    page.locator('button[type="button"]').filter({ hasText: /继\s*续/i }).first(),
+  ];
+
+  for (const button of candidates) {
+    try {
+      if (!(await button.isVisible())) {
+        continue;
+      }
+      await button.click();
+      log.info("检测到 OAuth 授权页，已尝试点击确认按钮");
+      return true;
+    } catch {
+      // noop
     }
-    await button.click();
-    log.info("检测到 OAuth 授权页，已尝试点击确认按钮");
-    return true;
-  } catch {
-    return false;
   }
+
+  return false;
 }
 
-async function waitForOauthCompletion(page: Page, timeoutSeconds: number): Promise<void> {
+async function waitForOauthCompletion(page: Page, timeoutSeconds: number, email: string): Promise<void> {
   const deadline = Date.now() + timeoutSeconds * 1000;
   let approved = false;
+  let accountSelected = false;
   while (Date.now() < deadline) {
     const currentUrl = page.url();
     if (isLocalCallbackUrl(currentUrl)) {
       log.info(`OAuth 回调已命中本地地址: ${currentUrl}`);
       return;
+    }
+    if (!accountSelected && currentUrl.includes("/device/selectAccounts")) {
+      accountSelected = await trySelectOauthAccount(page, email);
     }
     if (!approved) {
       approved = await tryApproveOauth(page);
@@ -709,7 +777,14 @@ async function main(): Promise<void> {
   });
 
   const page = await context.newPage();
+  const debugRecorder = await attachDebugRecorder(page, {
+    enabled: Boolean(appConfig.debugMode),
+    outputDir: appConfig.debugDir,
+    baseDir: __dirname,
+    prefix: "oauth",
+  });
   attachCaptchaDebugLogging(page);
+  await debugRecorder.captureCurrent("page-created");
 
   try {
     const cookieLoginOk = await tryCookieLogin(context, page, account, options.targetUrl);
@@ -722,7 +797,7 @@ async function main(): Promise<void> {
       if (!currentUrl.includes("/device/selectAccounts") && !isLocalCallbackUrl(currentUrl)) {
         await openOauthTarget(page, options.targetUrl);
       }
-      await waitForOauthCompletion(page, options.callbackTimeoutSeconds);
+      await waitForOauthCompletion(page, options.callbackTimeoutSeconds, account.email);
     }
 
     await sleep(1500);

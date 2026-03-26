@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .account_status import persist_summary_account_status, refresh_account_status
+from .account_status import persist_summary_account_status
 from .accounts import create_pending_managed_account, finalize_pending_account, remove_account
 from .auth_state import CachedUserInfo, ensure_auth_dir, save_cached_user_info, save_machine_id
 from .login import QoderLoginManager
@@ -378,10 +378,6 @@ def import_external_worker_account(
             encoding="utf-8",
         )
         persist_summary_account_status(qoder_home, summary)
-        try:
-            refresh_account_status(settings, qoder_home)
-        except Exception:
-            pass
         return finalize_pending_account(settings, account.id)
     except Exception:
         remove_account(settings, account.id)

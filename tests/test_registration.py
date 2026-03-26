@@ -13,7 +13,6 @@ def test_discover_qoderreg_project_path_prefers_repo_register() -> None:
 
 def test_import_external_worker_account_persists_auth_state(monkeypatch, tmp_path: Path) -> None:
     settings = Settings(qoder_home=str(tmp_path / '.qoder'), workspace=str(tmp_path))
-    monkeypatch.setattr('qoder2api.registration.refresh_account_status', lambda *args, **kwargs: None)
 
     account = import_external_worker_account(
         settings,

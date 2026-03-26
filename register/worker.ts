@@ -24,6 +24,8 @@ interface WorkerAppConfig {
   locale?: string;
   languages?: string[] | string;
   proxy?: string | { server: string; username?: string; password?: string; bypass?: string } | null;
+  debugMode?: boolean;
+  debugDir?: string;
   mailApiBase?: string;
   mailApiKey?: string;
   pythonExecutable?: string;
@@ -67,6 +69,11 @@ interface PureLoginReadyPayload {
 interface PureLoginHandle {
   ready: Promise<PureLoginReadyPayload>;
   result: Promise<Record<string, unknown>>;
+  terminate: () => void;
+}
+
+interface ManagedProcessHandle {
+  result: Promise<void>;
   terminate: () => void;
 }
 
@@ -549,6 +556,8 @@ async function writeRuntimeConfig(
         ? appConfig.languages
         : ['zh-CN', 'zh'],
     proxy: mergedProxy,
+    debugMode: Boolean(appConfig.debugMode),
+    debugDir: typeof appConfig.debugDir === 'string' ? appConfig.debugDir : 'debug',
     mailApiBase: (appConfig.mailApiBase || 'https://maliapi.215.im/v1').trim()
       || 'https://maliapi.215.im/v1',
     mailApiKey: appConfig.mailApiKey || '',
@@ -633,6 +642,84 @@ async function runProcess(
   });
 }
 
+function startManagedProcess(
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    onLine: (line: string) => Promise<void>;
+  },
+): ManagedProcessHandle {
+  const { cwd, onLine } = options;
+  const child = spawn(command, args, {
+    cwd,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let stdoutBuffer = '';
+  let stderrBuffer = '';
+  let terminatedByWorker = false;
+
+  const handleChunk = async (prefix: string, chunk: Buffer, current: string): Promise<string> => {
+    const merged = current + chunk.toString('utf8');
+    const lines = merged.split(/\r?\n/);
+    const remain = lines.pop() || '';
+    for (const line of lines) {
+      if (line.trim()) {
+        await onLine(`${prefix}${line}`);
+      }
+    }
+    return remain;
+  };
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    void (async () => {
+      stdoutBuffer = await handleChunk('', chunk, stdoutBuffer);
+    })().catch(() => undefined);
+  });
+
+  child.stderr?.on('data', (chunk: Buffer) => {
+    void (async () => {
+      stderrBuffer = await handleChunk('[stderr] ', chunk, stderrBuffer);
+    })().catch(() => undefined);
+  });
+
+  const result = new Promise<void>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      void (async () => {
+        if (stdoutBuffer.trim()) {
+          await onLine(stdoutBuffer.trim());
+        }
+        if (stderrBuffer.trim()) {
+          await onLine(`[stderr] ${stderrBuffer.trim()}`);
+        }
+        if (terminatedByWorker && signal === 'SIGTERM') {
+          resolve();
+          return;
+        }
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        const signalSuffix = signal ? `, signal=${signal}` : '';
+        reject(new Error(`子进程退出码异常: ${code ?? -1}${signalSuffix}`));
+      })().catch(reject);
+    });
+  });
+
+  return {
+    result,
+    terminate: () => {
+      if (!child.killed) {
+        terminatedByWorker = true;
+        child.kill('SIGTERM');
+      }
+    },
+  };
+}
+
 async function runClaim(
   backendUrl: string,
   claim: WorkerClaimPayload,
@@ -682,7 +769,7 @@ async function runClaim(
         account.email,
         ready.loginUrl,
       );
-      await runProcess(
+      const oauthProcess = startManagedProcess(
         tsxPath,
         [
           'login.ts',
@@ -699,7 +786,13 @@ async function runClaim(
           onLine: (line) => sendProgress(backendUrl, claim.session_id, `[oauth] ${line}`, 'oauth_signing_in', account.email, ready.loginUrl),
         },
       );
-      const summary = await pureLogin.result;
+      let summary: Record<string, unknown>;
+      try {
+        summary = await pureLogin.result;
+      } finally {
+        oauthProcess.terminate();
+        await oauthProcess.result.catch(() => undefined);
+      }
       await sendComplete(backendUrl, claim.session_id, account.email, account.password || '', summary);
     } catch (error) {
       pureLogin.terminate();

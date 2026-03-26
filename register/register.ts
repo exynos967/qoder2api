@@ -5,9 +5,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { Camoufox } from "camoufox-js";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 
 import { solveCaptcha } from "./captchaSolver";
+import { attachDebugRecorder } from "./debug";
 import { log } from "./utils/logger";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,8 @@ interface AppConfig {
   locale?: string;
   languages?: string[] | string;
   proxy?: ProxyConfig | null;
+  debugMode?: boolean;
+  debugDir?: string;
   mailApiBase?: string;
   mailApiKey?: string;
   outputFile?: string;
@@ -715,9 +718,10 @@ async function doRegisterWithBrowser(
   await continueButton.click();
 
   log.info("等待密码框显示...");
-  const passwordInput = page.locator("#basic_password");
-  await passwordInput.waitFor({ state: "visible", timeout: 15_000 });
-  await passwordInput.fill(password);
+  const passwordSelector = await revealPasswordInput(page, continueButton, {
+    timeout: 18_000,
+  });
+  await page.locator(passwordSelector).first().fill(password);
   log.info("填写密码完毕");
 
   await page.waitForTimeout(300);
@@ -867,7 +871,14 @@ async function doRegister(): Promise<{
   });
 
   const page = await context.newPage();
+  const debugRecorder = await attachDebugRecorder(page, {
+    enabled: Boolean(APP_CONFIG.debugMode),
+    outputDir: APP_CONFIG.debugDir,
+    baseDir: __dirname,
+    prefix: "register",
+  });
   attachCaptchaDebugLogging(page);
+  await debugRecorder.captureCurrent("page-created");
 
   try {
     const result = await doRegisterWithBrowser(
@@ -973,6 +984,48 @@ async function fillVisibleInputBySelectors(
   }
   await page.locator(selector).first().fill(value);
   return selector;
+}
+
+async function revealPasswordInput(
+  page: Page,
+  continueButton: Locator,
+  options: { timeout: number },
+): Promise<string> {
+  const passwordSelectors = [
+    "#basic_password",
+    'input[name="password"]',
+    'input[type="password"]',
+    'input[autocomplete="new-password"]',
+    'input[placeholder*="密码" i]',
+    'input[aria-label*="密码" i]',
+  ];
+  const deadline = Date.now() + options.timeout;
+  let attempts = 0;
+
+  while (Date.now() < deadline) {
+    const selector = await waitForAnyVisibleInput(page, passwordSelectors, { timeout: 1200 });
+    if (selector) {
+      return selector;
+    }
+
+    attempts += 1;
+    if (attempts <= 3) {
+      log.info(`密码框尚未出现，重试展开第 ${attempts} 次...`);
+      try {
+        if (await continueButton.isVisible().catch(() => false)) {
+          await continueButton.click({ force: attempts > 1 });
+        }
+      } catch {
+        // noop
+      }
+    }
+    await page.waitForTimeout(1200);
+  }
+
+  const snapshot = await collectPageDebugSnapshot(page);
+  throw new Error(
+    `未找到可见的密码输入框。当前 URL=${snapshot.url}，标题=${snapshot.title}，页面摘要=${snapshot.bodyPreview}`,
+  );
 }
 
 async function main(): Promise<void> {
