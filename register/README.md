@@ -29,7 +29,12 @@ npm run oauth -- <邮箱> --target-url <OAuth链接>
 
 ## 配置
 默认读取：
-- `register/config.json`
+- `register/config.json`（本地私有配置，不纳入 Git）
+
+首次使用请先复制模板：
+```bash
+cp register/config.json.example register/config.json
+```
 
 也支持：
 - `QODERREG_CONFIG_FILE=/abs/path/config.json`
@@ -49,7 +54,7 @@ npm run oauth -- <邮箱> --target-url <OAuth链接>
 - `pureLoginTimeoutSeconds`
 
 当 `autoStart=true` 时，只要启动 `worker.ts`，它就会主动连接 `qoder2api`：
-1. 先把本地 `config.json` 里的注册相关设置同步到 `qoder2api`
+1. 先把本地 `config.json`（建议由 `config.json.example` 复制而来）里的注册相关设置同步到 `qoder2api`
 2. 自动调用 `POST /webui/api/registration/start` 创建一轮注册任务
 3. 自动注册官网账号
 4. 在 worker 本机启动 `qoder_pure_login.py` 生成 machine OAuth 链接

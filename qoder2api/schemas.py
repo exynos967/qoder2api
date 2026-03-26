@@ -75,7 +75,7 @@ class RuntimeSettingsUpdateRequest(BaseModel):
     default_stream_openai: bool = True
     default_stream_anthropic: bool = False
     debug_logging_enabled: bool = False
-    registration_count: int = Field(default=1, ge=1, le=20)
+    registration_count: int = Field(default=1, ge=1, le=500)
     registration_browser_mode: Literal["headed", "headless", "virtual"] = "headless"
     registration_proxy_url: str = ""
     registration_mail_api_base: str = "https://maliapi.215.im/v1"

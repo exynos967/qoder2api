@@ -19,7 +19,7 @@
   "locale": "zh-CN",
   // 浏览器语言列表
   "languages": ["zh-CN", "zh"],
-  // 代理配置：null / "http://127.0.0.1:7890" / { server, username, password, bypass }
+  // 代理配置：null / "http://127.0.0.1:7890" / { "server": "http://127.0.0.1:7890", "username": "", "password": "", "bypass": "" }
   "proxy": null,
   // 临时邮箱 API 基础地址
   "mailApiBase": "https://maliapi.215.im/v1",

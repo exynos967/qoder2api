@@ -998,8 +998,8 @@ async function saveRegistrationSettings(event) {
     const mailApiBase = $('registration-mail-api-base').value.trim();
     const mailApiKey = $('registration-mail-api-key').value.trim();
 
-    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 20) {
-        showToast('本轮注册数量必须是 1 到 20 的整数', 'warning');
+    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 500) {
+        showToast('本轮注册数量必须是 1 到 500 的整数', 'warning');
         return;
     }
 

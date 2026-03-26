@@ -10,6 +10,7 @@ import { log } from './utils/logger';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'config.json');
+const TEMPLATE_CONFIG_FILE = path.join(__dirname, 'config.json.example');
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_CALLBACK_TIMEOUT_SECONDS = 180;
 const DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS = 300;
@@ -195,8 +196,15 @@ function loadConfig(explicit?: string): WorkerAppConfig {
     return {};
   }
   const raw = readFileSync(configFile, 'utf8');
-  const parsed = JSON.parse(stripJsonComments(raw)) as WorkerAppConfig;
-  return parsed && typeof parsed === 'object' ? parsed : {};
+  try {
+    const parsed = JSON.parse(stripJsonComments(raw)) as WorkerAppConfig;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `配置文件解析失败: ${configFile}。请检查 JSON 格式；首次使用请从 ${TEMPLATE_CONFIG_FILE} 复制生成 config.json。原始错误: ${details}`,
+    );
+  }
 }
 
 function resolveBackendUrl(options: CliOptions, config: WorkerAppConfig): string {
