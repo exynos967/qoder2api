@@ -15,6 +15,10 @@
   "pureLoginTimeoutSeconds": 300,
   // Camoufox 模式：headed / virtual / headless
   "browserMode": "headless",
+  // 调试模式：开启后主框架每个新 URL 会截图一次到 debugDir
+  "debugMode": false,
+  // 调试截图目录（相对路径基于 register/）
+  "debugDir": "debug",
   // 浏览器 locale
   "locale": "zh-CN",
   // 浏览器语言列表

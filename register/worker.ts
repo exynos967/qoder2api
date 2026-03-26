@@ -295,6 +295,7 @@ async function sendProgress(
   currentEmail?: string,
   authUrl?: string,
 ): Promise<void> {
+  emitLocalProgressLog(line);
   await apiRequest<Record<string, unknown>>(
     backendUrl,
     `/webui/api/registration/sessions/${sessionId}/worker/progress`,
@@ -308,6 +309,23 @@ async function sendProgress(
       }),
     },
   );
+}
+
+function emitLocalProgressLog(line: string): void {
+  const text = line.trim();
+  if (!text) {
+    return;
+  }
+
+  if (/\[error\]/i.test(text) || /\[stderr\]/i.test(text)) {
+    log.error(text);
+    return;
+  }
+  if (/\[warn\]/i.test(text)) {
+    log.warn(text);
+    return;
+  }
+  log.info(text);
 }
 
 async function sendComplete(

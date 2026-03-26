@@ -193,9 +193,15 @@ function updatePageMeta(page) {
 
 function syncAuthUrlInput() {
     const currentAuthUrl = state.registrationAuthUrl || state.authUrl || '';
-    $('auth-url').value = currentAuthUrl;
-    $('open-auth-url-btn').disabled = !currentAuthUrl;
-    $('copy-auth-url-btn').disabled = !currentAuthUrl;
+    const authUrlInput = $('auth-url');
+    const openAuthUrlButton = $('open-auth-url-btn');
+    const copyAuthUrlButton = $('copy-auth-url-btn');
+    if (!authUrlInput || !openAuthUrlButton || !copyAuthUrlButton) {
+        return;
+    }
+    authUrlInput.value = currentAuthUrl;
+    openAuthUrlButton.disabled = !currentAuthUrl;
+    copyAuthUrlButton.disabled = !currentAuthUrl;
 }
 
 function clearAuthUrlInput() {
@@ -233,12 +239,18 @@ function resolveRegistrationStatusMeta(status) {
 }
 
 function updateRegistrationActionState() {
+    const startRegistrationButton = $('start-registration-btn');
+    const cancelRegistrationButton = $('cancel-registration-btn');
+    const startLoginButton = $('start-login-btn');
+    if (!startRegistrationButton || !cancelRegistrationButton || !startLoginButton) {
+        return;
+    }
     const registrationBusy = !state.registrationSessionDone;
     const browserLoginBusy = !state.sessionDone;
     const available = Boolean(state.registration?.available);
-    $('start-registration-btn').disabled = !available || registrationBusy || browserLoginBusy;
-    $('cancel-registration-btn').disabled = !registrationBusy;
-    $('start-login-btn').disabled = registrationBusy || browserLoginBusy;
+    startRegistrationButton.disabled = !available || registrationBusy || browserLoginBusy;
+    cancelRegistrationButton.disabled = !registrationBusy;
+    startLoginButton.disabled = registrationBusy || browserLoginBusy;
 }
 
 function switchPage(page) {
@@ -305,6 +317,13 @@ function renderRegistration(payload = {}) {
     state.registrationSessionDone = !(session && !session.done);
     state.registrationAuthUrl = session && !session.done ? (session.auth_url || '') : '';
 
+    const registrationTerminalOutput = $('registration-terminal-output');
+    if (!registrationTerminalOutput) {
+        syncAuthUrlInput();
+        updateRegistrationActionState();
+        return;
+    }
+
     setText('registration-availability-text', availabilityText);
     setText('registration-session-status', statusMeta.text);
     setText('registration-current-email', session?.current_email || '—');
@@ -316,7 +335,7 @@ function renderRegistration(payload = {}) {
         'registration-session-meta',
         session?.message || registration.message || '尚未启动自动注册流程。',
     );
-    $('registration-terminal-output').textContent = session?.terminal_output || registration.message || '尚未启动自动注册流程。';
+    registrationTerminalOutput.textContent = session?.terminal_output || registration.message || '尚未启动自动注册流程。';
     scrollTerminalToBottom('registration-terminal-output');
     setBadgeTone('registration-availability-badge', availabilityBadgeText, available ? 'tone-success' : 'tone-warning');
     setBadgeTone('registration-session-badge', statusMeta.text, statusMeta.tone);
@@ -362,11 +381,15 @@ function resolvePlanTone(planText) {
     return 'tone-muted';
 }
 
-function resolveQuotaState(isQuotaExceeded) {
-    if (isQuotaExceeded === true) {
+function resolveQuotaState(account) {
+    const creditUsageError = String(account?.credit_usage_error || '').trim();
+    if (creditUsageError) {
+        return { text: '额度查询失败', tone: 'tone-warning' };
+    }
+    if (account?.is_quota_exceeded === true) {
         return { text: '额度受限', tone: 'tone-warning' };
     }
-    if (isQuotaExceeded === false) {
+    if (account?.is_quota_exceeded === false) {
         return { text: '额度正常', tone: 'tone-success' };
     }
     return { text: '额度未知', tone: 'tone-muted' };
@@ -640,7 +663,7 @@ function buildAccountCapabilityText(account) {
     const planText = normalizePlanLabel(account.plan_tier_name || account.user_tag || account.user_type || '');
     return {
         planText,
-        quota: resolveQuotaState(account.is_quota_exceeded),
+        quota: resolveQuotaState(account),
         quotaProgress: resolveQuotaProgress(account),
     };
 }
@@ -790,10 +813,6 @@ function renderRuntimeSettings(payload) {
         'settings-runtime-status',
         `当前生效并发 ${limit}，运行中 ${active}。OpenAI 默认${defaultStreamOpenAI ? '流式' : '非流式'}，Anthropic 默认${defaultStreamAnthropic ? '流式' : '非流式'}，调试日志已${debugLoggingEnabled ? '开启' : '关闭'}，代理${proxyConfigured ? '已配置' : '未配置'}，API Key${llmapiConfigured ? '已配置' : '未配置'}。`
     );
-    setText(
-        'registration-runtime-status',
-        `${registration.message || '自动注册工具状态正常。'} Worker 执行参数请直接维护 register/config.json；qoder2api 仅负责注册任务与入池结果，不再同步或覆盖浏览器、代理、邮箱等配置。`,
-    );
     renderRegistration(registration);
 
     setText('dashboard-concurrency-limit', String(limit));
@@ -925,7 +944,10 @@ function startRegistrationPolling() {
 }
 
 async function startBrowserLogin() {
-    $('start-login-btn').disabled = true;
+    const startLoginButton = $('start-login-btn');
+    if (startLoginButton) {
+        startLoginButton.disabled = true;
+    }
     clearAuthUrlInput();
     try {
         const data = await apiRequest(AUTH_START_API, {
@@ -945,12 +967,18 @@ async function startBrowserLogin() {
     } catch (error) {
         showToast(error.message, 'error');
     } finally {
-        $('start-login-btn').disabled = false;
+        if (startLoginButton) {
+            startLoginButton.disabled = false;
+        }
     }
 }
 
 async function copyAuthUrl() {
-    const currentAuthUrl = $('auth-url').value.trim();
+    const authUrlInput = $('auth-url');
+    if (!authUrlInput) {
+        return;
+    }
+    const currentAuthUrl = authUrlInput.value.trim();
     if (!currentAuthUrl) {
         return;
     }
@@ -958,13 +986,12 @@ async function copyAuthUrl() {
         if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
             await navigator.clipboard.writeText(currentAuthUrl);
         } else {
-            const input = $('auth-url');
-            input.removeAttribute('readonly');
-            input.focus();
-            input.select();
-            input.setSelectionRange(0, input.value.length);
+            authUrlInput.removeAttribute('readonly');
+            authUrlInput.focus();
+            authUrlInput.select();
+            authUrlInput.setSelectionRange(0, authUrlInput.value.length);
             const success = document.execCommand('copy');
-            input.setAttribute('readonly', 'readonly');
+            authUrlInput.setAttribute('readonly', 'readonly');
             if (!success) {
                 throw new Error('当前浏览器不支持剪贴板复制');
             }
@@ -976,7 +1003,11 @@ async function copyAuthUrl() {
 }
 
 function openAuthUrl() {
-    const currentAuthUrl = $('auth-url').value.trim();
+    const authUrlInput = $('auth-url');
+    if (!authUrlInput) {
+        return;
+    }
+    const currentAuthUrl = authUrlInput.value.trim();
     if (!currentAuthUrl) {
         return;
     }
@@ -984,7 +1015,10 @@ function openAuthUrl() {
 }
 
 async function startRegistration() {
-    $('start-registration-btn').disabled = true;
+    const startRegistrationButton = $('start-registration-btn');
+    if (startRegistrationButton) {
+        startRegistrationButton.disabled = true;
+    }
     try {
         const data = await apiRequest(`${REGISTRATION_API}/start`, {
             method: 'POST',
@@ -1006,7 +1040,10 @@ async function cancelRegistration() {
     if (!state.registrationSessionId) {
         return;
     }
-    $('cancel-registration-btn').disabled = true;
+    const cancelRegistrationButton = $('cancel-registration-btn');
+    if (cancelRegistrationButton) {
+        cancelRegistrationButton.disabled = true;
+    }
     try {
         const data = await apiRequest(`${REGISTRATION_API}/sessions/${state.registrationSessionId}/cancel`, {
             method: 'POST',
@@ -1264,8 +1301,12 @@ function bindEvents() {
     });
 
     $('dashboard-refresh-btn').addEventListener('click', () => loadOverview().catch((error) => showToast(error.message, 'error')));
-    $('start-registration-btn').addEventListener('click', startRegistration);
-    $('cancel-registration-btn').addEventListener('click', cancelRegistration);
+    if ($('start-registration-btn')) {
+        $('start-registration-btn').addEventListener('click', startRegistration);
+    }
+    if ($('cancel-registration-btn')) {
+        $('cancel-registration-btn').addEventListener('click', cancelRegistration);
+    }
     $('accounts-refresh-status-btn').addEventListener('click', () => refreshAllAccountStatuses().catch((error) => showToast(error.message, 'error')));
     $('accounts-refresh-btn').addEventListener('click', () => Promise.all([loadOverview(), loadAccounts()]).catch((error) => showToast(error.message, 'error')));
     $('models-refresh-btn').addEventListener('click', () => Promise.all([loadModels(), loadRuntimeSettings()]).catch((error) => showToast(error.message, 'error')));
@@ -1276,9 +1317,15 @@ function bindEvents() {
     bindToggleSwitch('settings-default-stream-openai');
     bindToggleSwitch('settings-default-stream-anthropic');
     bindToggleSwitch('settings-debug-logging-enabled');
-    $('start-login-btn').addEventListener('click', startBrowserLogin);
-    $('open-auth-url-btn').addEventListener('click', openAuthUrl);
-    $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);
+    if ($('start-login-btn')) {
+        $('start-login-btn').addEventListener('click', startBrowserLogin);
+    }
+    if ($('open-auth-url-btn')) {
+        $('open-auth-url-btn').addEventListener('click', openAuthUrl);
+    }
+    if ($('copy-auth-url-btn')) {
+        $('copy-auth-url-btn').addEventListener('click', copyAuthUrl);
+    }
     $('playground-form').addEventListener('submit', submitPlayground);
     $('runtime-settings-form').addEventListener('submit', saveRuntimeSettings);
     $('playground-clear-btn').addEventListener('click', clearPlayground);

@@ -348,7 +348,8 @@ def test_inspect_local_auth_and_webui_routes(monkeypatch, tmp_path: Path) -> Non
     js_text = (Path(file_response.path).parent / "js" / "app.js").read_text(encoding="utf-8")
     assert file_response.status_code == 200
     assert "实时概览" in index_html
-    assert "Oauth链接" in index_html
+    assert "自动注册与 OAuth 入池" not in index_html
+    assert "Oauth链接" not in index_html
     assert "Infer Endpoint" not in index_html
     assert "const OVERVIEW_API = '/webui/api/overview';" in js_text
 

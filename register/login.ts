@@ -262,7 +262,7 @@ async function gotoWithRetry(
   url: string,
   options: { timeout: number; attempts?: number },
 ): Promise<void> {
-  const { timeout, attempts = 3 } = options;
+  const { timeout, attempts = 5 } = options;
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -488,7 +488,7 @@ async function tryCookieLogin(
   log.info(`尝试使用 accounts.json 中保存的 cookies 自动登录: ${entryUrl}`);
   await context.addCookies(account.cookies);
   try {
-    await gotoWithRetry(page, entryUrl, { timeout: 30_000, attempts: 3 });
+    await gotoWithRetry(page, entryUrl, { timeout: 30_000, attempts: 5 });
   } catch (error) {
     log.warn("Cookie 登录入口打开失败，准备回退账号密码登录", {
       url: entryUrl,
@@ -513,7 +513,7 @@ async function doCredentialLogin(
 ): Promise<void> {
   const entryUrl = resolveEntryUrl();
   log.info(`打开登录页面: ${entryUrl}`);
-  await gotoWithRetry(page, entryUrl, { timeout: 30_000, attempts: 3 });
+  await gotoWithRetry(page, entryUrl, { timeout: 30_000, attempts: 5 });
   await waitForPageStable(page);
   await logBrowserFingerprint(page);
 
@@ -566,7 +566,7 @@ async function doCredentialLogin(
 
 async function openOauthTarget(page: Page, targetUrl: string): Promise<void> {
   log.info(`登录成功，准备打开 OAuth 页面: ${targetUrl}`);
-  await gotoWithRetry(page, targetUrl, { timeout: 30_000, attempts: 3 });
+  await gotoWithRetry(page, targetUrl, { timeout: 30_000, attempts: 5 });
   await waitForPageStable(page);
 }
 
@@ -804,8 +804,16 @@ async function main(): Promise<void> {
     await updateStoredCookies(accountsFile, context, accounts, index);
     log.info(`登录成功，当前 URL: ${page.url()}`);
   } finally {
-    await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    try {
+      await context.close();
+    } catch {
+      // noop
+    }
+    try {
+      await browser.close();
+    } catch {
+      // noop
+    }
   }
 }
 

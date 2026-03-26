@@ -266,7 +266,7 @@ async function gotoWithRetry(
   url: string,
   options: { timeout: number; attempts?: number },
 ): Promise<void> {
-  const { timeout, attempts = 3 } = options;
+  const { timeout, attempts = 5 } = options;
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -569,9 +569,13 @@ async function waitForVerificationCode(
         });
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       log.warn("轮询邮件异常", {
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
+      if (message.toLowerCase().includes("fetch failed")) {
+        throw new Error(`轮询邮件失败: ${message}`);
+      }
     }
 
     await sleep(pollIntervalMs);
@@ -642,7 +646,7 @@ async function doRegisterWithBrowser(
   tempToken: string,
 ): Promise<RegisterResult> {
   log.info("打开注册页面...");
-  await gotoWithRetry(page, QODER_SIGNUP_URL, { timeout: 30_000, attempts: 3 });
+  await gotoWithRetry(page, QODER_SIGNUP_URL, { timeout: 30_000, attempts: 5 });
   await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
   await page.waitForTimeout(2000);
   await logBrowserFingerprint(page);
@@ -905,8 +909,16 @@ async function doRegister(): Promise<{
       result,
     };
   } finally {
-    await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    try {
+      await context.close();
+    } catch {
+      // noop
+    }
+    try {
+      await browser.close();
+    } catch {
+      // noop
+    }
   }
 }
 
