@@ -428,6 +428,11 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
             else device_metadata.get("output_dir", "")
         ),
         "model_count": model_count,
+        "consecutive_request_failures": account.consecutive_request_failures,
+        "cooldown_until": account.cooldown_until or "",
+        "cooldown_active": bool(account.cooldown_until),
+        "last_request_failed_at": account.last_request_failed_at or "",
+        "last_request_error": account.last_request_error,
         "created_at": account.created_at,
         "updated_at": account.updated_at,
     }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -17,10 +17,35 @@ from .settings import Settings
 
 _ACCOUNT_FILE_LOCK = threading.RLock()
 _DEVICE_METADATA_NAME = "xieyi_device.json"
+_ACCOUNT_REQUEST_COOLDOWN_FAILURE_THRESHOLD = 2
+_ACCOUNT_REQUEST_DISABLE_FAILURE_THRESHOLD = 5
+_ACCOUNT_REQUEST_COOLDOWN_SECONDS = 300
 
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _reset_request_failure_state(account: 'QoderAccount') -> None:
+    account.consecutive_request_failures = 0
+    account.cooldown_until = None
+    account.last_request_failed_at = None
+    account.last_request_error = ""
+
+
+def _is_account_in_cooldown(account: 'QoderAccount') -> bool:
+    cooldown_until = _parse_iso(account.cooldown_until)
+    return cooldown_until is not None and cooldown_until > datetime.now()
 
 
 class QoderAccount(BaseModel):
@@ -42,6 +67,10 @@ class QoderAccount(BaseModel):
     machine_type: str = ""
     device_hostname: str = ""
     device_mac: str = ""
+    consecutive_request_failures: int = 0
+    cooldown_until: str | None = None
+    last_request_failed_at: str | None = None
+    last_request_error: str = ""
 
     @property
     def qoder_home_path(self) -> Path:
@@ -107,6 +136,14 @@ def _normalize_account(account: QoderAccount) -> QoderAccount:
     account.machine_type = (account.machine_type or "").strip()
     account.device_hostname = (account.device_hostname or "").strip()
     account.device_mac = (account.device_mac or "").strip()
+    account.consecutive_request_failures = max(int(account.consecutive_request_failures or 0), 0)
+    account.cooldown_until = str(account.cooldown_until or "").strip() or None
+    account.last_request_failed_at = str(account.last_request_failed_at or "").strip() or None
+    account.last_request_error = (account.last_request_error or "").strip()
+
+    cooldown_until = _parse_iso(account.cooldown_until)
+    if cooldown_until is not None and cooldown_until <= datetime.now():
+        account.cooldown_until = None
 
     if not account.created_at:
         account.created_at = _now_iso()
@@ -260,7 +297,11 @@ def get_enabled_accounts(settings: Settings) -> list[QoderAccount]:
     return [
         account
         for account in accounts
-        if account.enabled and inspect_local_auth(account.qoder_home_path).get("logged_in_hint")
+        if (
+            account.enabled
+            and not _is_account_in_cooldown(account)
+            and inspect_local_auth(account.qoder_home_path).get("logged_in_hint")
+        )
     ]
 
 
@@ -293,6 +334,7 @@ def finalize_pending_account(settings: Settings, account_id: str) -> QoderAccoun
             refreshed = _account_from_auth_state(account=existing, auth_state=auth_state)
             refreshed.status = "ready"
             refreshed.enabled = True
+            _reset_request_failure_state(refreshed)
             refreshed.updated_at = _now_iso()
             config.accounts[index] = refreshed
             _save_pool_config_unlocked(settings, config)
@@ -331,6 +373,8 @@ def update_account_enabled(settings: Settings, account_id: str, enabled: bool) -
                 continue
             updated = existing.model_copy(deep=True)
             updated.enabled = enabled
+            if enabled:
+                _reset_request_failure_state(updated)
             updated.updated_at = _now_iso()
             config.accounts[index] = _normalize_account(updated)
             _save_pool_config_unlocked(settings, config)
@@ -350,6 +394,53 @@ def update_account_label(settings: Settings, account_id: str, label: str) -> Qod
                 continue
             updated = existing.model_copy(deep=True)
             updated.label = normalized_label
+            updated.updated_at = _now_iso()
+            config.accounts[index] = _normalize_account(updated)
+            _save_pool_config_unlocked(settings, config)
+            return config.accounts[index]
+    raise KeyError(account_id)
+
+
+def mark_account_request_success(settings: Settings, account_id: str) -> QoderAccount:
+    with _ACCOUNT_FILE_LOCK:
+        config = _load_pool_config_unlocked(settings)
+        for index, existing in enumerate(config.accounts):
+            if existing.id != account_id:
+                continue
+            updated = existing.model_copy(deep=True)
+            _reset_request_failure_state(updated)
+            updated.updated_at = _now_iso()
+            config.accounts[index] = _normalize_account(updated)
+            _save_pool_config_unlocked(settings, config)
+            return config.accounts[index]
+    raise KeyError(account_id)
+
+
+def mark_account_request_failure(
+    settings: Settings,
+    account_id: str,
+    *,
+    error_message: str,
+    cooldown_seconds: int = _ACCOUNT_REQUEST_COOLDOWN_SECONDS,
+    cooldown_threshold: int = _ACCOUNT_REQUEST_COOLDOWN_FAILURE_THRESHOLD,
+    disable_threshold: int = _ACCOUNT_REQUEST_DISABLE_FAILURE_THRESHOLD,
+) -> QoderAccount:
+    with _ACCOUNT_FILE_LOCK:
+        config = _load_pool_config_unlocked(settings)
+        for index, existing in enumerate(config.accounts):
+            if existing.id != account_id:
+                continue
+            updated = existing.model_copy(deep=True)
+            updated.consecutive_request_failures = max(updated.consecutive_request_failures, 0) + 1
+            updated.last_request_failed_at = _now_iso()
+            updated.last_request_error = error_message.strip()
+            if updated.consecutive_request_failures >= disable_threshold:
+                updated.enabled = False
+                updated.cooldown_until = None
+            elif updated.consecutive_request_failures >= cooldown_threshold:
+                updated.cooldown_until = (
+                    datetime.now() + timedelta(seconds=max(cooldown_seconds, 1))
+                ).isoformat(timespec="seconds")
             updated.updated_at = _now_iso()
             config.accounts[index] = _normalize_account(updated)
             _save_pool_config_unlocked(settings, config)
@@ -380,17 +471,24 @@ class QoderAccountPool:
     def is_configured(self) -> bool:
         return is_pool_configured(self.settings)
 
-    def pick_account(self, preferred_account_id: str | None = None) -> QoderAccount | None:
+    def pick_accounts_for_request(
+        self,
+        preferred_account_id: str | None = None,
+    ) -> list[QoderAccount]:
         enabled_accounts = self.get_enabled_accounts()
         if not enabled_accounts:
-            return None
+            return []
 
         if preferred_account_id:
             for account in enabled_accounts:
                 if account.id == preferred_account_id:
-                    return account
+                    return [account]
 
         with self._lock:
             index = self._round_robin_index % len(enabled_accounts)
             self._round_robin_index = (self._round_robin_index + 1) % len(enabled_accounts)
-            return enabled_accounts[index]
+            return enabled_accounts[index:] + enabled_accounts[:index]
+
+    def pick_account(self, preferred_account_id: str | None = None) -> QoderAccount | None:
+        accounts = self.pick_accounts_for_request(preferred_account_id=preferred_account_id)
+        return accounts[0] if accounts else None

@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from qoder2api.accounts import (
@@ -9,6 +10,8 @@ from qoder2api.accounts import (
     get_account,
     get_enabled_accounts,
     list_accounts,
+    mark_account_request_failure,
+    mark_account_request_success,
     remove_account,
     update_account_enabled,
     update_account_label,
@@ -83,7 +86,80 @@ def test_account_pool_pick_account_round_robin(monkeypatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(pool, "get_enabled_accounts", lambda: [account_a, account_b])
 
-    assert pool.pick_account().id == "acct-a"
-    assert pool.pick_account().id == "acct-b"
+    assert [account.id for account in pool.pick_accounts_for_request()] == ["acct-a", "acct-b"]
+    assert [account.id for account in pool.pick_accounts_for_request()] == ["acct-b", "acct-a"]
     assert pool.pick_account().id == "acct-a"
     assert pool.pick_account(preferred_account_id="acct-b").id == "acct-b"
+
+
+def test_mark_account_request_failure_sets_cooldown_and_auto_disable(tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    pending = create_pending_managed_account(settings, "主力号")
+    save_machine_id(pending.qoder_home_path, "1234567890abcdef-managed")
+    save_cached_user_info(
+        pending.qoder_home_path,
+        build_cached_user(uid="managed-user", name="新账号"),
+    )
+    account = finalize_pending_account(settings, pending.id)
+
+    updated = mark_account_request_failure(settings, account.id, error_message="boom-1")
+    assert updated.consecutive_request_failures == 1
+    assert updated.cooldown_until is None
+    assert updated.enabled is True
+
+    updated = mark_account_request_failure(settings, account.id, error_message="boom-2")
+    assert updated.consecutive_request_failures == 2
+    assert updated.cooldown_until is not None
+    assert updated.enabled is True
+    assert datetime.fromisoformat(updated.cooldown_until) > datetime.now()
+
+    updated = mark_account_request_failure(settings, account.id, error_message="boom-5")
+    updated = mark_account_request_failure(settings, account.id, error_message="boom-6")
+    updated = mark_account_request_failure(settings, account.id, error_message="boom-7")
+    assert updated.consecutive_request_failures == 5
+    assert updated.enabled is False
+    assert updated.cooldown_until is None
+    assert updated.last_request_error == "boom-7"
+
+
+def test_mark_account_request_success_resets_failure_state(tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    pending = create_pending_managed_account(settings, "主力号")
+    save_machine_id(pending.qoder_home_path, "1234567890abcdef-managed")
+    save_cached_user_info(
+        pending.qoder_home_path,
+        build_cached_user(uid="managed-user", name="新账号"),
+    )
+    account = finalize_pending_account(settings, pending.id)
+    mark_account_request_failure(settings, account.id, error_message="boom-1")
+    updated = mark_account_request_failure(settings, account.id, error_message="boom-2")
+    assert updated.cooldown_until is not None
+
+    recovered = mark_account_request_success(settings, account.id)
+    assert recovered.consecutive_request_failures == 0
+    assert recovered.cooldown_until is None
+    assert recovered.last_request_error == ""
+
+
+def test_get_enabled_accounts_skips_accounts_in_cooldown(tmp_path: Path) -> None:
+    qoder_home = prepare_qoder_home(tmp_path)
+    settings = Settings(qoder_home=str(qoder_home), workspace=str(tmp_path))
+    pending = create_pending_managed_account(settings, "主力号")
+    save_machine_id(pending.qoder_home_path, "1234567890abcdef-managed")
+    save_cached_user_info(
+        pending.qoder_home_path,
+        build_cached_user(uid="managed-user", name="新账号"),
+    )
+    account = finalize_pending_account(settings, pending.id)
+    cooled = mark_account_request_failure(settings, account.id, error_message="boom-1")
+    cooled = mark_account_request_failure(settings, cooled.id, error_message="boom-2")
+
+    assert get_enabled_accounts(settings) == []
+
+    stored = get_account(settings, account.id)
+    assert stored is not None
+    stored.cooldown_until = (datetime.now() - timedelta(seconds=1)).isoformat(timespec="seconds")
+    stored.updated_at = datetime.now().isoformat(timespec="seconds")
+    update_account_label(settings, stored.id, stored.label)

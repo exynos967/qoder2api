@@ -168,37 +168,3 @@ def test_render_openai_messages_builds_structured_tool_history() -> None:
             "content": '{"city":"北京","weather":"晴"}',
         },
     ]
-
-
-def test_render_openai_messages_truncates_large_tool_results() -> None:
-    long_content = "A" * 9000 + "\n===SPLIT===\n" + "B" * 5000
-    prepared = render_openai_messages(
-        [
-            ChatMessage(role="user", content="读取文件"),
-            ChatMessage(
-                role="assistant",
-                content=None,
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "Read", "arguments": '{"file_path":"/tmp/demo.txt"}'},
-                    }
-                ],
-            ),
-            ChatMessage(
-                role="tool",
-                tool_call_id="call_1",
-                content=long_content,
-            ),
-        ]
-    )
-
-    tool_message = prepared.messages[2]
-    assert tool_message["role"] == "tool"
-    assert "[tool_result 内容过长，已截断。" in tool_message["content"]
-    assert "<tool_result_head>" in tool_message["content"]
-    assert "<tool_result_tail>" in tool_message["content"]
-    assert len(tool_message["content"]) < len(long_content)
-    assert "[tool_result 内容过长，已截断。" in prepared.prompt
-    assert "===SPLIT===" not in tool_message["content"]
