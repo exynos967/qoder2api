@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 import shutil
 import time
 import uuid
@@ -40,8 +39,6 @@ from .crypto import (
 from .settings import Settings
 from .streaming import ParsedStreamEvent, QoderStreamJSONParser
 from .runtime_settings import load_runtime_settings
-
-logger = logging.getLogger("qoder2api")
 
 _DEFAULT_CLIENT_ID = "e93fe488-5778-4c35-a6fc-0f54ed7b3139"
 _CHAT_PATH = (
@@ -492,8 +489,6 @@ class QoderAPIClient:
         self,
         line: str,
         parser: QoderStreamJSONParser,
-        *,
-        debug_tool: bool = False,
     ) -> tuple[ParsedStreamEvent | None, bool]:
         stripped = (line or "").strip()
         if not stripped or stripped.startswith(":"):
@@ -510,14 +505,7 @@ class QoderAPIClient:
         try:
             payload = json.loads(stripped)
         except json.JSONDecodeError:
-            parsed = parser.feed_line(stripped)
-            if debug_tool and parsed and parsed.tool_call_deltas:
-                logger.info(
-                    "TOOL_DEBUG parse_stream (feed_line) tool_call_deltas=%s raw_snippet=%s",
-                    parsed.tool_call_deltas,
-                    stripped[:500],
-                )
-            return parsed, False
+            return parser.feed_line(stripped), False
 
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, str):
@@ -530,12 +518,6 @@ class QoderAPIClient:
             parsed = parser.feed_line(body)
             if parsed is not None:
                 parsed.raw = {"wrapper": payload, "body": parsed.raw}
-            if debug_tool and parsed and parsed.tool_call_deltas:
-                logger.info(
-                    "TOOL_DEBUG parse_stream (body feed_line) tool_call_deltas=%s raw_snippet=%s",
-                    parsed.tool_call_deltas,
-                    body[:500] if body else "",
-                )
             return parsed, False
 
         if isinstance(payload, dict):
@@ -543,23 +525,9 @@ class QoderAPIClient:
             if status_code >= 400:
                 message = self._extract_error_message(json.dumps(payload, ensure_ascii=False))
                 return ParsedStreamEvent(raw=payload, error_message=message), True
-            parsed = parser.feed_event(payload)
-            if debug_tool and parsed and parsed.tool_call_deltas:
-                logger.info(
-                    "TOOL_DEBUG parse_stream (feed_event) tool_call_deltas=%s raw_snippet=%s",
-                    parsed.tool_call_deltas,
-                    json.dumps(payload, ensure_ascii=False)[:500],
-                )
-            return parsed, False
+            return parser.feed_event(payload), False
 
-        parsed = parser.feed_line(stripped)
-        if debug_tool and parsed and parsed.tool_call_deltas:
-            logger.info(
-                "TOOL_DEBUG parse_stream (fallback feed_line) tool_call_deltas=%s raw_snippet=%s",
-                parsed.tool_call_deltas,
-                stripped[:500],
-            )
-        return parsed, False
+        return parser.feed_line(stripped), False
 
     async def _stream_chat_via_curl(
         self,
@@ -613,11 +581,7 @@ class QoderAPIClient:
                         status_code = 0
                     continue
 
-                parsed_event, terminal = self._parse_chat_stream_line(
-                    line,
-                    parser,
-                    debug_tool=load_runtime_settings().debug_logging_enabled,
-                )
+                parsed_event, terminal = self._parse_chat_stream_line(line, parser)
                 if parsed_event is not None:
                     if parsed_event.error_message:
                         stream_error_message = parsed_event.error_message
