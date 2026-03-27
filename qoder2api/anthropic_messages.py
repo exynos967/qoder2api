@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .schemas import ChatCompletionRequest, ChatMessage, CompletionInvocationRequest
+from .schemas import ChatMessage, CompletionInvocationRequest
 from .streaming import ParsedStreamEvent
 
 
@@ -559,21 +559,6 @@ def build_anthropic_invocation_request(
     )
 
 
-def convert_anthropic_request_to_chat_request(
-    request: AnthropicMessagesRequest,
-) -> ChatCompletionRequest:
-    invocation_request = build_anthropic_invocation_request(request)
-    return ChatCompletionRequest(
-        model=invocation_request.model,
-        messages=convert_anthropic_request_to_chat_messages(request),
-        stream=request.stream,
-        max_tokens=invocation_request.max_tokens,
-        temperature=request.temperature,
-        tools=invocation_request.tools,
-        tool_choice=invocation_request.tool_choice,
-    )
-
-
 def _tool_call_to_anthropic_block(
     tool_call: dict[str, Any],
     tool_schemas: dict[str, dict[str, Any]] | None = None,
@@ -713,8 +698,11 @@ class AnthropicStreamTranslator:
             payloads.extend(self._emit_reasoning_signature_delta(stream_event.reasoning_signature_delta))
         if stream_event.text_delta:
             payloads.extend(self._process_text_delta(stream_event.text_delta))
-        if stream_event.tool_call_deltas and not self.matched_stop_sequence:
-            payloads.extend(self._emit_tool_call_deltas(stream_event.tool_call_deltas))
+        if not self.matched_stop_sequence:
+            if stream_event.anthropic_tool_events:
+                payloads.extend(self._passthrough_anthropic_tool_events(stream_event.anthropic_tool_events))
+            elif stream_event.tool_call_deltas:
+                payloads.extend(self._emit_tool_call_deltas(stream_event.tool_call_deltas))
         if stream_event.finish_reason:
             self.finish_reason = stream_event.finish_reason
         return payloads
@@ -918,8 +906,43 @@ class AnthropicStreamTranslator:
         )
         return payloads
 
+    def _passthrough_anthropic_tool_events(self, events: list[dict[str, Any]]) -> list[str]:
+        """直接透传上游原始 Anthropic tool_use 事件，避免双重转换。"""
+        payloads: list[str] = []
+        payloads.extend(self._close_thinking_block())
+        if self._text_block_index is not None and not self._text_block_stopped:
+            payloads.append(
+                _anthropic_sse_payload(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": self._text_block_index},
+                )
+            )
+            self._text_block_stopped = True
+
+        for event in events:
+            event_type = str(event.get("type") or "").strip().lower()
+            block_index = event.get("index")
+
+            if event_type == "content_block_start" and isinstance(block_index, int):
+                content_block = event.get("content_block") or {}
+                tool_name = str(content_block.get("name") or "")
+                tool_id = str(content_block.get("id") or "")
+                # 跟踪 tool state 用于 finish() 的 has_tool_calls / token 估算
+                self._tool_states[block_index] = _ToolBlockState(
+                    content_index=block_index,
+                    tool_id=tool_id,
+                    tool_name=tool_name,
+                )
+                # 确保 _next_content_index 不会和上游索引冲突
+                if block_index >= self._next_content_index:
+                    self._next_content_index = block_index + 1
+
+            payloads.append(_anthropic_sse_payload(event_type, event))
+
+        return payloads
+
     def _emit_tool_call_deltas(self, delta_tool_calls: list[dict[str, Any]]) -> list[str]:
-        """实时透传 tool_call 增量，不累积合并喵～"""
+        """OpenAI 格式 tool_call 增量转为 Anthropic SSE（fallback 路径）。"""
         payloads: list[str] = []
         payloads.extend(self._close_thinking_block())
         if self._text_block_index is not None and not self._text_block_stopped:
@@ -984,15 +1007,6 @@ class AnthropicStreamTranslator:
                 )
 
         return payloads
-
-    def _emit_pending_tool_arguments(
-        self,
-        state: _ToolBlockState,
-        *,
-        final: bool = False,
-    ) -> list[str]:
-        """No longer needed - arguments are emitted in realtime now."""
-        return []
 
     def _flush_late_tool_blocks(self) -> list[str]:
         """Simplified: no longer need to discover unseen tools from accumulated tool_calls."""

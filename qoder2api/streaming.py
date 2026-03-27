@@ -345,6 +345,8 @@ class ParsedStreamEvent:
     reasoning_delta: str = ""
     reasoning_signature_delta: str = ""
     tool_call_deltas: list[ToolCallDelta] = field(default_factory=list)
+    # 上游原始 Anthropic SSE 事件（tool_use 相关），可直接透传给 Anthropic 客户端
+    anthropic_tool_events: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = None
     error_message: str = ""
     error_type: str = "api_error"
@@ -541,7 +543,7 @@ class QoderStreamJSONParser:
                             "arguments": "",
                             "tool_index": tool_index,
                         }
-                        # 构造 OpenAI 风格的 tool_call_delta（用 tool_index 而非 block_index）
+                        # OpenAI 路径用
                         event.tool_call_deltas = [
                             {
                                 "index": tool_index,
@@ -550,6 +552,8 @@ class QoderStreamJSONParser:
                                 "function": {"name": tool_name, "arguments": ""},
                             }
                         ]
+                        # Anthropic 路径直接透传原始事件
+                        event.anthropic_tool_events = [stream_payload]
                     return event
             snapshot_text = _join_text_blocks(content_block)
             snapshot_reasoning = _join_reasoning_blocks(content_block)
@@ -571,13 +575,15 @@ class QoderStreamJSONParser:
                         state = self._tool_block_states.get(block_index)
                         if state is not None:
                             state["arguments"] += partial_json
-                            # 构造 OpenAI 风格的 tool_call_delta（用 tool_index 而非 block_index）
+                            # OpenAI 路径用
                             event.tool_call_deltas = [
                                 {
                                     "index": state["tool_index"],
                                     "function": {"arguments": partial_json},
                                 }
                             ]
+                            # Anthropic 路径直接透传原始事件
+                            event.anthropic_tool_events = [stream_payload]
                     return event
             event.text_delta = self._append_delta(message_id, _join_text_blocks(delta_payload))
             event.reasoning_delta = self._append_reasoning_delta(
