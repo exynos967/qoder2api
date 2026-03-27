@@ -600,6 +600,7 @@ def build_anthropic_message_response(
     reasoning_text: str = "",
     reasoning_signature: str = "",
     tool_calls: list[dict[str, Any]] | None,
+    anthropic_tool_blocks: list[dict[str, Any]] | None = None,
     finish_reason: str | None,
     input_tokens: int,
     output_tokens: int,
@@ -617,8 +618,13 @@ def build_anthropic_message_response(
         content.append(thinking_block)
     if normalized_text:
         content.append({"type": "text", "text": normalized_text})
-    for tool_call in tool_calls or []:
-        content.append(_tool_call_to_anthropic_block(tool_call, tool_schemas))
+    # 优先使用原始 Anthropic tool blocks（避免双重转换）
+    if anthropic_tool_blocks:
+        content.extend(anthropic_tool_blocks)
+    else:
+        for tool_call in tool_calls or []:
+            content.append(_tool_call_to_anthropic_block(tool_call, tool_schemas))
+    has_tool_calls = bool(anthropic_tool_blocks or tool_calls)
 
     return {
         "id": message_id,
@@ -631,7 +637,7 @@ def build_anthropic_message_response(
             if stop_sequence
             else _map_finish_reason_to_stop_reason(
                 finish_reason,
-                has_tool_calls=bool(tool_calls),
+                has_tool_calls=has_tool_calls,
             )
         ),
         "stop_sequence": stop_sequence,

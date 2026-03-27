@@ -935,11 +935,13 @@ def _build_completion_response(
     }
 
 
-async def _collect_stream_result(iterator) -> tuple[str, str, str, list[dict[str, Any]], str]:
+async def _collect_stream_result(iterator) -> tuple[str, str, str, list[dict[str, Any]], list[dict[str, Any]], str]:
     output_parts: list[str] = []
     reasoning_parts: list[str] = []
     reasoning_signature = ""
     tool_calls: list[dict[str, Any]] = []
+    # 收集原始 Anthropic tool_use blocks（透传用）
+    anthropic_tool_blocks: dict[int, dict[str, Any]] = {}
     finish_reason = "stop"
 
     async for stream_event in iterator:
@@ -951,10 +953,49 @@ async def _collect_stream_result(iterator) -> tuple[str, str, str, list[dict[str
             output_parts.append(stream_event.text_delta)
         if stream_event.tool_call_deltas:
             tool_calls = merge_tool_call_deltas(tool_calls, stream_event.tool_call_deltas)
+        # 收集 Anthropic 原始 tool events 用于非流式响应透传
+        for event in stream_event.anthropic_tool_events:
+            event_type = str(event.get("type") or "").lower()
+            block_index = event.get("index")
+            if not isinstance(block_index, int):
+                continue
+            if event_type == "content_block_start":
+                content_block = event.get("content_block") or {}
+                if content_block.get("type") == "tool_use":
+                    anthropic_tool_blocks[block_index] = {
+                        "type": "tool_use",
+                        "id": content_block.get("id") or "",
+                        "name": content_block.get("name") or "",
+                        "input": {},
+                        "_input_json": "",
+                    }
+            elif event_type == "content_block_delta":
+                delta = event.get("delta") or {}
+                if delta.get("type") == "input_json_delta":
+                    block = anthropic_tool_blocks.get(block_index)
+                    if block is not None:
+                        block["_input_json"] += delta.get("partial_json") or ""
         if stream_event.finish_reason:
             finish_reason = stream_event.finish_reason
 
-    return "".join(output_parts).strip(), "".join(reasoning_parts).strip(), reasoning_signature, tool_calls, finish_reason
+    # 解析累积的 JSON 并构建最终 tool blocks
+    finalized_anthropic_tools: list[dict[str, Any]] = []
+    for block in anthropic_tool_blocks.values():
+        input_json = block.pop("_input_json", "")
+        try:
+            block["input"] = json.loads(input_json) if input_json else {}
+        except json.JSONDecodeError:
+            block["input"] = {}
+        finalized_anthropic_tools.append(block)
+
+    return (
+        "".join(output_parts).strip(),
+        "".join(reasoning_parts).strip(),
+        reasoning_signature,
+        tool_calls,
+        finalized_anthropic_tools,
+        finish_reason,
+    )
 
 
 def _completion_basis(
@@ -990,7 +1031,7 @@ async def _run_non_stream_completion(
     request: CompletionInvocationRequest,
     *,
     prompt: PreparedPrompt,
-) -> tuple[str, str, str, str, list[dict[str, Any]], str]:
+) -> tuple[str, str, str, str, list[dict[str, Any]], list[dict[str, Any]], str]:
     invoker = get_invoker()
     async with get_invocation_limiter().slot():
         iterator, resolved_model = await invoker.stream_events(
@@ -1002,8 +1043,8 @@ async def _run_non_stream_completion(
             tools=request.tools,
             tool_choice=request.tool_choice,
         )
-        output_text, reasoning_content, reasoning_signature, tool_calls, finish_reason = await _collect_stream_result(iterator)
-        return output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason
+        output_text, reasoning_content, reasoning_signature, tool_calls, anthropic_tool_blocks, finish_reason = await _collect_stream_result(iterator)
+        return output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, anthropic_tool_blocks, finish_reason
 
 
 async def _start_streaming_completion(
@@ -1034,7 +1075,7 @@ async def chat_completions(request: ChatCompletionRequest):
     stream_mode = _resolve_openai_request_stream_mode(request.stream)
 
     if not stream_mode:
-        output_text, reasoning_content, _, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
+        output_text, reasoning_content, _, resolved_model, tool_calls, _, finish_reason = await _run_non_stream_completion(
             invocation_request,
             prompt=prompt,
         )
@@ -1182,7 +1223,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
     stream_mode = _resolve_anthropic_request_stream_mode(request.stream)
 
     if not stream_mode:
-        output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
+        output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, anthropic_tool_blocks, finish_reason = await _run_non_stream_completion(
             invocation_request,
             prompt=prompt,
         )
@@ -1202,6 +1243,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
                 reasoning_text=reasoning_content,
                 reasoning_signature=reasoning_signature,
                 tool_calls=tool_calls,
+                anthropic_tool_blocks=anthropic_tool_blocks,
                 finish_reason=("stop_sequence" if stop_result.matched else finish_reason),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
