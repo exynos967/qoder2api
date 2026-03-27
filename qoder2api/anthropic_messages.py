@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .schemas import ChatCompletionRequest, ChatMessage
-from .streaming import ParsedStreamEvent, merge_tool_call_deltas
+from .streaming import ParsedStreamEvent
 
 
 class AnthropicMessageParam(BaseModel):
@@ -655,7 +655,6 @@ class AnthropicStreamTranslator:
         self.text_output = ""
         self.reasoning_output = ""
         self.reasoning_signature = ""
-        self.tool_calls: list[dict[str, Any]] = []
         self.finish_reason: str | None = None
         self.stop_sequences = _normalize_stop_sequences(stop_sequences)
         self._pending_text = ""
@@ -719,10 +718,10 @@ class AnthropicStreamTranslator:
             )
             self._text_block_stopped = True
 
+        # Close all open tool blocks
         for state in self._tool_states.values():
             if state.stopped:
                 continue
-            payloads.extend(self._emit_pending_tool_arguments(state, final=True))
             payloads.append(
                 _anthropic_sse_payload(
                     "content_block_stop",
@@ -736,8 +735,12 @@ class AnthropicStreamTranslator:
             completion_basis_parts.append(self.reasoning_output.strip())
         if self.text_output.strip():
             completion_basis_parts.append(self.text_output.strip())
-        if not completion_basis_parts and self.tool_calls:
-            completion_basis_parts.append(json.dumps(self.tool_calls, ensure_ascii=False))
+        # Use _tool_states to determine has_tool_calls since we no longer accumulate tool_calls
+        has_tool_calls = bool(self._tool_states)
+        if not completion_basis_parts and has_tool_calls:
+            # Estimate tokens from tool names as fallback
+            tool_names = [s.tool_name for s in self._tool_states.values()]
+            completion_basis_parts.append(json.dumps(tool_names, ensure_ascii=False))
         output_tokens = _estimate_tokens("\n".join(completion_basis_parts))
         payloads.append(
             _anthropic_sse_payload(
@@ -750,7 +753,7 @@ class AnthropicStreamTranslator:
                             if self.matched_stop_sequence
                             else _map_finish_reason_to_stop_reason(
                                 self.finish_reason,
-                                has_tool_calls=bool(self.tool_calls),
+                                has_tool_calls=has_tool_calls,
                             )
                         ),
                         "stop_sequence": self.matched_stop_sequence,
@@ -898,6 +901,7 @@ class AnthropicStreamTranslator:
         return payloads
 
     def _emit_tool_call_deltas(self, delta_tool_calls: list[dict[str, Any]]) -> list[str]:
+        """实时透传 tool_call 增量，不累积合并喵～"""
         payloads: list[str] = []
         payloads.extend(self._close_thinking_block())
         if self._text_block_index is not None and not self._text_block_stopped:
@@ -908,21 +912,20 @@ class AnthropicStreamTranslator:
                 )
             )
             self._text_block_stopped = True
-        self.tool_calls = merge_tool_call_deltas(self.tool_calls, delta_tool_calls)
 
         for item in delta_tool_calls:
             raw_index = item.get("index")
             if not isinstance(raw_index, int):
                 continue
-            state = self._tool_states.get(raw_index)
-            merged_call = self.tool_calls[raw_index] if raw_index < len(self.tool_calls) else {}
-            function_payload = merged_call.get("function") or {}
-            tool_name = str(function_payload.get("name") or "").strip()
-            tool_id = str(merged_call.get("id") or "").strip()
 
-            if state is None:
-                if not tool_name:
-                    continue
+            state = self._tool_states.get(raw_index)
+            tool_id = str(item.get("id") or "").strip()
+            function_payload = item.get("function") or {}
+            tool_name = str(function_payload.get("name") or "").strip()
+            tool_args = str(function_payload.get("arguments") or "")
+
+            # New tool call - emit content_block_start
+            if state is None and (tool_name or tool_id):
                 state = _ToolBlockState(
                     content_index=self._next_content_index,
                     tool_id=tool_id or f"toolu_{uuid.uuid4().hex}",
@@ -945,6 +948,23 @@ class AnthropicStreamTranslator:
                         },
                     )
                 )
+
+            # Realtime emit arguments delta - no accumulation!
+            if tool_args and state is not None:
+                payloads.append(
+                    _anthropic_sse_payload(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": state.content_index,
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": tool_args,
+                            },
+                        },
+                    )
+                )
+
         return payloads
 
     def _emit_pending_tool_arguments(
@@ -953,48 +973,11 @@ class AnthropicStreamTranslator:
         *,
         final: bool = False,
     ) -> list[str]:
-        payloads: list[str] = []
-        tool_index = next(
-            (index for index, tool_state in self._tool_states.items() if tool_state is state),
-            None,
-        )
-        if tool_index is None or tool_index >= len(self.tool_calls):
-            return payloads
-
-        function_payload = self.tool_calls[tool_index].get("function") or {}
-        if not final:
-            return payloads
-
-        tool_name = str(function_payload.get("name") or "").strip()
-        arguments_text = json.dumps(
-            _sanitize_tool_input(
-                str(function_payload.get("arguments") or ""),
-                self.tool_schemas.get(tool_name),
-            ),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        if len(arguments_text) <= state.emitted_arguments_length:
-            return payloads
-
-        partial_json = arguments_text[state.emitted_arguments_length :]
-        state.emitted_arguments_length = len(arguments_text)
-        payloads.append(
-            _anthropic_sse_payload(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": state.content_index,
-                    "delta": {
-                        "type": "input_json_delta",
-                        "partial_json": partial_json,
-                    },
-                },
-            )
-        )
-        return payloads
+        """No longer needed - arguments are emitted in realtime now."""
+        return []
 
     def _flush_late_tool_blocks(self) -> list[str]:
+        """Simplified: no longer need to discover unseen tools from accumulated tool_calls."""
         payloads: list[str] = []
         payloads.extend(self._close_thinking_block())
         if self._text_block_index is not None and not self._text_block_stopped:
@@ -1005,35 +988,4 @@ class AnthropicStreamTranslator:
                 )
             )
             self._text_block_stopped = True
-        for index, tool_call in enumerate(self.tool_calls):
-            if index in self._tool_states:
-                continue
-            function_payload = tool_call.get("function") or {}
-            tool_name = str(function_payload.get("name") or "").strip()
-            if not tool_name:
-                continue
-            tool_id = str(tool_call.get("id") or f"toolu_{uuid.uuid4().hex}")
-            state = _ToolBlockState(
-                content_index=self._next_content_index,
-                tool_id=tool_id,
-                tool_name=tool_name,
-            )
-            self._tool_states[index] = state
-            self._next_content_index += 1
-            payloads.append(
-                _anthropic_sse_payload(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": state.content_index,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": state.tool_id,
-                            "name": state.tool_name,
-                            "input": {},
-                        },
-                    },
-                )
-            )
-            payloads.extend(self._emit_pending_tool_arguments(state, final=True))
         return payloads
