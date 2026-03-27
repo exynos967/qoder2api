@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     default_model: str = "auto"
     model_scene: str = "chat"
     request_timeout_seconds: int = Field(default=600, ge=10, le=3600)
-    stream_chunk_chars: int = Field(default=512, ge=32, le=8192)
+    stream_chunk_chars: int = Field(default=128, ge=32, le=8192)
 
     model_config = SettingsConfigDict(
         env_prefix="QODER2API_",
