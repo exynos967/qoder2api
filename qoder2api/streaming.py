@@ -359,8 +359,9 @@ class QoderStreamJSONParser:
         self._reasoning_snapshots: dict[str, str] = {}
         self._reasoning_signatures: dict[str, str] = {}
         # Anthropic stream_event 中的 tool_use 状态跟踪
-        # key: content_block index, value: {id, name, arguments}
-        self._tool_block_states: dict[int, dict[str, str]] = {}
+        # key: content_block index, value: {id, name, arguments, tool_index}
+        self._tool_block_states: dict[int, dict[str, Any]] = {}
+        self._next_tool_index: int = 0
 
     def _append_delta(self, message_id: str, delta_text: str) -> str:
         if not delta_text:
@@ -532,15 +533,18 @@ class QoderStreamJSONParser:
                     if isinstance(block_index, int):
                         tool_id = _as_text(content_block.get("id")).strip()
                         tool_name = _as_text(content_block.get("name")).strip()
+                        tool_index = self._next_tool_index
+                        self._next_tool_index += 1
                         self._tool_block_states[block_index] = {
                             "id": tool_id,
                             "name": tool_name,
                             "arguments": "",
+                            "tool_index": tool_index,
                         }
-                        # 构造 OpenAI 风格的 tool_call_delta
+                        # 构造 OpenAI 风格的 tool_call_delta（用 tool_index 而非 block_index）
                         event.tool_call_deltas = [
                             {
-                                "index": block_index,
+                                "index": tool_index,
                                 "id": tool_id,
                                 "type": "function",
                                 "function": {"name": tool_name, "arguments": ""},
@@ -567,10 +571,10 @@ class QoderStreamJSONParser:
                         state = self._tool_block_states.get(block_index)
                         if state is not None:
                             state["arguments"] += partial_json
-                            # 构造 OpenAI 风格的 tool_call_delta
+                            # 构造 OpenAI 风格的 tool_call_delta（用 tool_index 而非 block_index）
                             event.tool_call_deltas = [
                                 {
-                                    "index": block_index,
+                                    "index": state["tool_index"],
                                     "function": {"arguments": partial_json},
                                 }
                             ]
