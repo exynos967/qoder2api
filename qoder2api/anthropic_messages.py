@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .schemas import ChatCompletionRequest, ChatMessage
+from .schemas import ChatCompletionRequest, ChatMessage, CompletionInvocationRequest
 from .streaming import ParsedStreamEvent
 
 
@@ -530,9 +530,9 @@ def _anthropic_tool_choice_to_openai(
     return tool_choice
 
 
-def convert_anthropic_request_to_chat_request(
+def convert_anthropic_request_to_chat_messages(
     request: AnthropicMessagesRequest,
-) -> ChatCompletionRequest:
+) -> list[ChatMessage]:
     messages: list[ChatMessage] = []
     messages.extend(_system_to_messages(request.system))
 
@@ -545,14 +545,32 @@ def convert_anthropic_request_to_chat_request(
             continue
         raise ValueError(f"不支持的 Anthropic 消息角色: {message.role}")
 
-    return ChatCompletionRequest(
+    return messages
+
+
+def build_anthropic_invocation_request(
+    request: AnthropicMessagesRequest,
+) -> CompletionInvocationRequest:
+    return CompletionInvocationRequest(
         model=request.model,
-        messages=messages,
-        stream=request.stream,
         max_tokens=request.max_tokens,
-        temperature=request.temperature,
         tools=[_anthropic_tool_to_openai(tool) for tool in request.tools or []] or None,
         tool_choice=_anthropic_tool_choice_to_openai(request.tool_choice),
+    )
+
+
+def convert_anthropic_request_to_chat_request(
+    request: AnthropicMessagesRequest,
+) -> ChatCompletionRequest:
+    invocation_request = build_anthropic_invocation_request(request)
+    return ChatCompletionRequest(
+        model=invocation_request.model,
+        messages=convert_anthropic_request_to_chat_messages(request),
+        stream=request.stream,
+        max_tokens=invocation_request.max_tokens,
+        temperature=request.temperature,
+        tools=invocation_request.tools,
+        tool_choice=invocation_request.tool_choice,
     )
 
 

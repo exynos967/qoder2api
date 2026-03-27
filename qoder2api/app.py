@@ -32,14 +32,15 @@ from .anthropic_messages import (
     AnthropicStreamTranslator,
     _build_tool_schema_map,
     _apply_stop_sequences,
+    build_anthropic_invocation_request,
     build_anthropic_message_response,
-    convert_anthropic_request_to_chat_request,
+    convert_anthropic_request_to_chat_messages,
 )
 from .auth_state import inspect_local_auth
 from .catalog import QoderModelInfo, load_qoder_models
 from .concurrency import AdjustableConcurrencyLimiter
 from .login import QoderLoginError, QoderLoginManager
-from .prompting import PreparedPrompt, render_openai_messages
+from .prompting import PreparedPrompt, render_anthropic_messages, render_openai_messages
 from .qoder_api import QoderAPIClient, QoderAPIError
 from .qoder_cli import QoderCLIError, QoderCLIInvoker
 from .registration import QoderRegistrationError, QoderRegistrationManager
@@ -49,6 +50,7 @@ from .schemas import (
     AccountLabelUpdateRequest,
     AccountToggleRequest,
     ChatCompletionRequest,
+    CompletionInvocationRequest,
     LoginSessionInputRequest,
     RegistrationStartRequest,
     RuntimeSettingsUpdateRequest,
@@ -973,8 +975,19 @@ def _completion_basis(
     return ""
 
 
-async def _run_non_stream_completion(
+def _build_completion_invocation_request(
     request: ChatCompletionRequest,
+) -> CompletionInvocationRequest:
+    return CompletionInvocationRequest(
+        model=request.model,
+        max_tokens=request.max_tokens,
+        tools=request.tools,
+        tool_choice=request.tool_choice,
+    )
+
+
+async def _run_non_stream_completion(
+    request: CompletionInvocationRequest,
     *,
     prompt: PreparedPrompt,
 ) -> tuple[str, str, str, str, list[dict[str, Any]], str]:
@@ -994,7 +1007,7 @@ async def _run_non_stream_completion(
 
 
 async def _start_streaming_completion(
-    request: ChatCompletionRequest,
+    request: CompletionInvocationRequest,
     *,
     prompt: PreparedPrompt,
 ):
@@ -1015,13 +1028,14 @@ async def _start_streaming_completion(
 async def chat_completions(request: ChatCompletionRequest):
     _log_debug_request("/v1/chat/completions", request.model_dump(exclude_none=True))
     prompt = render_openai_messages(request.messages, request.response_format)
+    invocation_request = _build_completion_invocation_request(request)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     stream_mode = _resolve_openai_request_stream_mode(request.stream)
 
     if not stream_mode:
         output_text, reasoning_content, _, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
-            request,
+            invocation_request,
             prompt=prompt,
         )
         return JSONResponse(
@@ -1041,7 +1055,7 @@ async def chat_completions(request: ChatCompletionRequest):
         resolved_model = request.model
         try:
             iterator, resolved_model = await _start_streaming_completion(
-                request,
+                invocation_request,
                 prompt=prompt,
             )
 
@@ -1160,16 +1174,16 @@ async def chat_completions(request: ChatCompletionRequest):
 @app.post("/v1/messages", response_model=None)
 async def anthropic_messages(request: AnthropicMessagesRequest):
     _log_debug_request("/v1/messages", request.model_dump(exclude_none=True))
-    chat_request = convert_anthropic_request_to_chat_request(request)
+    invocation_request = build_anthropic_invocation_request(request)
     tool_schemas = _build_tool_schema_map(request.tools)
-    prompt = render_openai_messages(chat_request.messages)
+    prompt = render_anthropic_messages(convert_anthropic_request_to_chat_messages(request))
     message_id = f"msg_{uuid.uuid4().hex}"
     input_tokens = _estimate_tokens(prompt.prompt)
     stream_mode = _resolve_anthropic_request_stream_mode(request.stream)
 
     if not stream_mode:
         output_text, reasoning_content, reasoning_signature, resolved_model, tool_calls, finish_reason = await _run_non_stream_completion(
-            chat_request,
+            invocation_request,
             prompt=prompt,
         )
         stop_result = _apply_stop_sequences(output_text, request.stop_sequences)
@@ -1205,7 +1219,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
         )
         try:
             iterator, resolved_model = await _start_streaming_completion(
-                chat_request,
+                invocation_request,
                 prompt=prompt,
             )
             for payload in translator.start(model=resolved_model):

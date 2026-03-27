@@ -34,6 +34,17 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class CompletionInvocationRequest(BaseModel):
+    """内部共享的推理调用参数。"""
+
+    model: str = "auto"
+    max_tokens: int | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class LoginSessionInputRequest(BaseModel):
     """兼容保留：向登录会话发送按键。"""
 

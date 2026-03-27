@@ -1,4 +1,4 @@
-"""把 OpenAI chat 消息压平为 Qoder 可接受的 prompt。"""
+"""把对话消息压平为 Qoder 可接受的 prompt。"""
 
 from __future__ import annotations
 
@@ -347,11 +347,12 @@ def _render_response_format_hint(response_format: dict[str, Any] | None) -> str:
     return ""
 
 
-def render_openai_messages(
+def _render_messages_prompt(
     messages: list[ChatMessage],
+    *,
+    intro_lines: list[str],
     response_format: dict[str, Any] | None = None,
 ) -> PreparedPrompt:
-    """把 OpenAI 对话转换成单条 Qoder prompt。"""
     if not messages:
         raise ValueError("messages 不能为空")
 
@@ -371,11 +372,7 @@ def render_openai_messages(
     if not dialogue_blocks:
         raise ValueError("至少需要一条非 system 消息")
 
-    prompt_lines = [
-        "你正在处理一个经由 qoder2api 转发的 OpenAI Chat Completions 请求。",
-        "请结合系统指令和完整对话历史，直接继续回答最后一个用户问题。",
-        "保持与用户相同的语言；如果用户明确要求特定格式，请严格遵守。",
-    ]
+    prompt_lines = list(intro_lines)
 
     if system_blocks:
         prompt_lines.extend(
@@ -402,4 +399,32 @@ def render_openai_messages(
         prompt="\n".join(prompt_lines).strip(),
         attachments=attachments,
         messages=upstream_messages,
+    )
+
+
+def render_openai_messages(
+    messages: list[ChatMessage],
+    response_format: dict[str, Any] | None = None,
+) -> PreparedPrompt:
+    """把 OpenAI 对话转换成单条 Qoder prompt。"""
+    return _render_messages_prompt(
+        messages,
+        intro_lines=[
+            "你正在处理一个经由 qoder2api 转发的 OpenAI Chat Completions 请求。",
+            "请结合系统指令和完整对话历史，直接继续回答最后一个用户问题。",
+            "保持与用户相同的语言；如果用户明确要求特定格式，请严格遵守。",
+        ],
+        response_format=response_format,
+    )
+
+
+def render_anthropic_messages(messages: list[ChatMessage]) -> PreparedPrompt:
+    """把 Anthropic Messages 对话转换成单条 Qoder prompt。"""
+    return _render_messages_prompt(
+        messages,
+        intro_lines=[
+            "你正在处理一个经由 qoder2api 转发的 Anthropic Messages 请求。",
+            "请结合系统指令、完整对话历史和工具上下文，继续输出下一条 assistant 消息。",
+            "保持与用户相同的语言；如果用户明确要求特定格式，请严格遵守。",
+        ],
     )
