@@ -1202,6 +1202,7 @@ async def anthropic_messages(request: AnthropicMessagesRequest):
             prompt_text=prompt.prompt,
             stop_sequences=request.stop_sequences,
             tool_schemas=tool_schemas,
+            debug_tool_logging=get_runtime_settings_manager().load().debug_logging_enabled,
         )
         try:
             iterator, resolved_model = await _start_streaming_completion(

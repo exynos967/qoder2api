@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .schemas import ChatCompletionRequest, ChatMessage
 from .streaming import ParsedStreamEvent
+
+logger = logging.getLogger("qoder2api")
 
 
 class AnthropicMessageParam(BaseModel):
@@ -649,6 +652,7 @@ class AnthropicStreamTranslator:
         prompt_text: str,
         stop_sequences: list[str] | None = None,
         tool_schemas: dict[str, dict[str, Any]] | None = None,
+        debug_tool_logging: bool = False,
     ) -> None:
         self.message_id = message_id
         self.prompt_tokens = _estimate_tokens(prompt_text)
@@ -667,6 +671,7 @@ class AnthropicStreamTranslator:
         self._tool_states: dict[int, _ToolBlockState] = {}
         self._next_content_index = 0
         self.tool_schemas = dict(tool_schemas or {})
+        self._debug_tool = debug_tool_logging
 
     def start(self, *, model: str) -> list[str]:
         self._model = model
@@ -717,6 +722,28 @@ class AnthropicStreamTranslator:
                 )
             )
             self._text_block_stopped = True
+
+        # Debug logging for tool states at finish time
+        if self._debug_tool and self._tool_states:
+            finish_summary = {
+                idx: {
+                    "name": s.tool_name,
+                    "stopped": s.stopped,
+                    "content_index": s.content_index,
+                    "emitted_args_len": s.emitted_arguments_length,
+                }
+                for idx, s in self._tool_states.items()
+            }
+            never_got_args = [
+                idx
+                for idx, s in self._tool_states.items()
+                if not s.stopped and s.emitted_arguments_length == 0
+            ]
+            logger.info(
+                "TOOL_DEBUG finish states=%s never_got_args=%s",
+                finish_summary,
+                never_got_args,
+            )
 
         # Close all open tool blocks
         for state in self._tool_states.values():
@@ -902,6 +929,13 @@ class AnthropicStreamTranslator:
 
     def _emit_tool_call_deltas(self, delta_tool_calls: list[dict[str, Any]]) -> list[str]:
         """实时透传 tool_call 增量，不累积合并喵～"""
+        debug = self._debug_tool
+        if debug:
+            logger.info(
+                "TOOL_DEBUG emit_deltas input=%s states=%s",
+                delta_tool_calls,
+                list(self._tool_states.keys()),
+            )
         payloads: list[str] = []
         payloads.extend(self._close_thinking_block())
         if self._text_block_index is not None and not self._text_block_stopped:
@@ -916,6 +950,11 @@ class AnthropicStreamTranslator:
         for item in delta_tool_calls:
             raw_index = item.get("index")
             if not isinstance(raw_index, int):
+                if debug:
+                    logger.info(
+                        "TOOL_DEBUG emit_deltas SKIP non-int index item=%s",
+                        item,
+                    )
                 continue
 
             state = self._tool_states.get(raw_index)
@@ -948,9 +987,18 @@ class AnthropicStreamTranslator:
                         },
                     )
                 )
+                if debug:
+                    logger.info(
+                        "TOOL_DEBUG emit_deltas NEW_TOOL raw_index=%d content_index=%d id=%s name=%s",
+                        raw_index,
+                        state.content_index,
+                        state.tool_id,
+                        state.tool_name,
+                    )
 
             # Realtime emit arguments delta - no accumulation!
             if tool_args and state is not None:
+                state.emitted_arguments_length += len(tool_args)
                 payloads.append(
                     _anthropic_sse_payload(
                         "content_block_delta",
@@ -963,6 +1011,18 @@ class AnthropicStreamTranslator:
                             },
                         },
                     )
+                )
+                if debug:
+                    logger.info(
+                        "TOOL_DEBUG emit_json_delta index=%d partial=%s",
+                        state.content_index,
+                        tool_args[:200],
+                    )
+            elif not tool_args and state is not None and debug:
+                logger.info(
+                    "TOOL_DEBUG emit_deltas EMPTY_ARGS raw_index=%d content_index=%d",
+                    raw_index,
+                    state.content_index,
                 )
 
         return payloads
