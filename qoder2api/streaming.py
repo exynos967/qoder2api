@@ -358,6 +358,9 @@ class QoderStreamJSONParser:
         self._message_snapshots: dict[str, str] = {}
         self._reasoning_snapshots: dict[str, str] = {}
         self._reasoning_signatures: dict[str, str] = {}
+        # Anthropic stream_event 中的 tool_use 状态跟踪
+        # key: content_block index, value: {id, name, arguments}
+        self._tool_block_states: dict[int, dict[str, str]] = {}
 
     def _append_delta(self, message_id: str, delta_text: str) -> str:
         if not delta_text:
@@ -521,6 +524,29 @@ class QoderStreamJSONParser:
 
         if subtype == "content_block_start":
             content_block = stream_payload.get("content_block") or stream_payload.get("content")
+            if isinstance(content_block, dict):
+                block_type = _as_text(content_block.get("type")).strip().lower()
+                if block_type == "tool_use":
+                    # Anthropic 风格的 tool_use content_block_start
+                    block_index = stream_payload.get("index")
+                    if isinstance(block_index, int):
+                        tool_id = _as_text(content_block.get("id")).strip()
+                        tool_name = _as_text(content_block.get("name")).strip()
+                        self._tool_block_states[block_index] = {
+                            "id": tool_id,
+                            "name": tool_name,
+                            "arguments": "",
+                        }
+                        # 构造 OpenAI 风格的 tool_call_delta
+                        event.tool_call_deltas = [
+                            {
+                                "index": block_index,
+                                "id": tool_id,
+                                "type": "function",
+                                "function": {"name": tool_name, "arguments": ""},
+                            }
+                        ]
+                    return event
             snapshot_text = _join_text_blocks(content_block)
             snapshot_reasoning = _join_reasoning_blocks(content_block)
             signature_text = _extract_reasoning_signature(content_block)
@@ -531,6 +557,24 @@ class QoderStreamJSONParser:
 
         if subtype == "content_block_delta":
             delta_payload = stream_payload.get("delta")
+            if isinstance(delta_payload, dict):
+                delta_type = _as_text(delta_payload.get("type")).strip().lower()
+                if delta_type == "input_json_delta":
+                    # Anthropic 风格的 tool_use input delta
+                    block_index = stream_payload.get("index")
+                    partial_json = _as_text(delta_payload.get("partial_json"))
+                    if isinstance(block_index, int) and partial_json:
+                        state = self._tool_block_states.get(block_index)
+                        if state is not None:
+                            state["arguments"] += partial_json
+                            # 构造 OpenAI 风格的 tool_call_delta
+                            event.tool_call_deltas = [
+                                {
+                                    "index": block_index,
+                                    "function": {"arguments": partial_json},
+                                }
+                            ]
+                    return event
             event.text_delta = self._append_delta(message_id, _join_text_blocks(delta_payload))
             event.reasoning_delta = self._append_reasoning_delta(
                 message_id,
