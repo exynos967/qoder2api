@@ -529,6 +529,43 @@ class QoderAPIClient:
 
         return parser.feed_line(stripped), False
 
+    def _parse_chat_stream_message(
+        self,
+        lines: list[str],
+        parser: QoderStreamJSONParser,
+    ) -> list[tuple[ParsedStreamEvent | None, bool]]:
+        data_lines: list[str] = []
+        fallback_payloads: list[str] = []
+
+        for raw_line in lines:
+            stripped = (raw_line or "").strip()
+            if not stripped or stripped.startswith(":"):
+                continue
+            if stripped.startswith("event:"):
+                continue
+            if stripped.startswith("data:"):
+                data_lines.append(stripped[5:].strip())
+                continue
+            fallback_payloads.append(stripped)
+
+        payloads: list[str] = []
+        if data_lines:
+            payloads.append("\n".join(data_lines))
+        payloads.extend(fallback_payloads)
+
+        return [self._parse_chat_stream_line(payload, parser) for payload in payloads if payload]
+
+    def _pop_chat_stream_lines(self, buffer: bytearray) -> list[str]:
+        lines: list[str] = []
+        while True:
+            newline_index = buffer.find(b"\n")
+            if newline_index < 0:
+                break
+            raw_line = bytes(buffer[:newline_index])
+            del buffer[: newline_index + 1]
+            lines.append(raw_line.rstrip(b"\r").decode("utf-8", errors="replace"))
+        return lines
+
     async def _stream_chat_via_curl(
         self,
         *,
@@ -544,6 +581,7 @@ class QoderAPIClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=1024 * 1024,
             )
         except FileNotFoundError as exc:
             raise QoderAPIError(
@@ -571,25 +609,66 @@ class QoderAPIClient:
         if process.stderr is not None:
             stderr_task = asyncio.create_task(process.stderr.read())
 
-        if process.stdout is not None:
-            async for raw_line in process.stdout:
-                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
-                if line.startswith("__STATUS__:"):
-                    try:
-                        status_code = int(line.split(":", 1)[1].strip())
-                    except ValueError:
-                        status_code = 0
-                    continue
-
-                parsed_event, terminal = self._parse_chat_stream_line(line, parser)
+        async def handle_message_lines(message_lines: list[str]) -> None:
+            nonlocal finished, status_code, stream_error_message
+            for parsed_event, terminal in self._parse_chat_stream_message(message_lines, parser):
                 if parsed_event is not None:
                     if parsed_event.error_message:
                         stream_error_message = parsed_event.error_message
                         finished = True
-                        break
-                    yield parsed_event
+                        return
+                    yield_events.append(parsed_event)
                 if terminal:
                     finished = True
+
+        yield_events: list[ParsedStreamEvent] = []
+        if process.stdout is not None:
+            stdout_buffer = bytearray()
+            pending_message_lines: list[str] = []
+
+            while True:
+                chunk = await process.stdout.read(65536)
+                if not chunk:
+                    break
+                stdout_buffer.extend(chunk)
+                for line in self._pop_chat_stream_lines(stdout_buffer):
+                    if not line:
+                        if pending_message_lines:
+                            await handle_message_lines(pending_message_lines)
+                            pending_message_lines = []
+                            for event in yield_events:
+                                yield event
+                            yield_events.clear()
+                            if stream_error_message:
+                                break
+                        continue
+
+                    if line.startswith("__STATUS__:") and not pending_message_lines:
+                        try:
+                            status_code = int(line.split(":", 1)[1].strip())
+                        except ValueError:
+                            status_code = 0
+                        continue
+
+                    pending_message_lines.append(line)
+
+                if stream_error_message:
+                    break
+
+            if stdout_buffer:
+                pending_message_lines.append(stdout_buffer.decode("utf-8", errors="replace").rstrip("\r"))
+
+            if pending_message_lines and not stream_error_message:
+                if len(pending_message_lines) == 1 and pending_message_lines[0].startswith("__STATUS__:"):
+                    try:
+                        status_code = int(pending_message_lines[0].split(":", 1)[1].strip())
+                    except ValueError:
+                        status_code = 0
+                else:
+                    await handle_message_lines(pending_message_lines)
+                    for event in yield_events:
+                        yield event
+                    yield_events.clear()
 
         if stream_error_message and process.returncode is None:
             process.terminate()
