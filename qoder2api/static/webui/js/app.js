@@ -124,6 +124,10 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+function escapeHtmlAttribute(value) {
+    return escapeHtml(value).replace(/\n/g, '&#10;');
+}
+
 function showToast(message, type = 'info') {
     const container = $('toast-container');
     const toast = document.createElement('div');
@@ -407,8 +411,14 @@ function iconSvg(name) {
     return icons[name] || icons.detect;
 }
 
-function buildActionButton({ action, accountId, label, icon, disabled = false, variant = 'secondary', extraAttrs = '' }) {
-    return `<button type="button" class="btn btn-${variant} btn-sm btn-with-icon" data-action="${action}" data-account-id="${accountId}" ${extraAttrs} ${disabled ? 'disabled' : ''}><span class="btn-icon" aria-hidden="true">${iconSvg(icon)}</span><span>${label}</span></button>`;
+function buildActionButton({ action, accountId, label, icon, disabled = false, variant = 'secondary', extraAttrs = '', title = '' }) {
+    const normalizedTitle = String(title || '').trim();
+    const titleAttr = normalizedTitle ? `title="${escapeHtmlAttribute(normalizedTitle)}"` : '';
+    const buttonHtml = `<button type="button" class="btn btn-${variant} btn-sm btn-with-icon" data-action="${action}" data-account-id="${accountId}" ${titleAttr} ${extraAttrs} ${disabled ? 'disabled' : ''}><span class="btn-icon" aria-hidden="true">${iconSvg(icon)}</span><span>${label}</span></button>`;
+    if (!normalizedTitle) {
+        return buttonHtml;
+    }
+    return `<span class="action-tooltip-wrapper" ${titleAttr}>${buttonHtml}</span>`;
 }
 
 function loadingIconSvg() {
@@ -549,8 +559,102 @@ function renderOverview(data) {
     renderAccountsTable(state.accounts);
 }
 
+function toPositiveInt(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 0;
+    }
+    return Math.trunc(parsed);
+}
+
+function formatAccountTimestamp(value) {
+    const text = String(value || '').trim();
+    if (!text) {
+        return '';
+    }
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) {
+        return text;
+    }
+    return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function truncateText(value, maxLength = 72) {
+    const text = String(value || '').trim();
+    if (!text || text.length <= maxLength) {
+        return text;
+    }
+    return `${text.slice(0, Math.max(maxLength - 1, 1))}…`;
+}
+
+function isAccountCoolingDown(account) {
+    return Boolean(account?.cooldown_active);
+}
+
+function isAccountAutoDisabled(account) {
+    return !account?.enabled && toPositiveInt(account?.consecutive_request_failures) >= 5;
+}
+
+function buildAccountFailureTitle(account) {
+    const lines = [];
+    const failures = toPositiveInt(account?.consecutive_request_failures);
+    if (failures > 0) {
+        lines.push(`连续失败 ${failures} 次`);
+    }
+    const cooldownUntil = formatAccountTimestamp(account?.cooldown_until);
+    if (isAccountCoolingDown(account) && cooldownUntil) {
+        lines.push(`冷却至 ${cooldownUntil}`);
+    }
+    const failedAt = formatAccountTimestamp(account?.last_request_failed_at);
+    if (failedAt) {
+        lines.push(`最近失败：${failedAt}`);
+    }
+    const error = String(account?.last_request_error || '').trim();
+    if (error) {
+        lines.push(`原因：${error}`);
+    }
+    return lines.join('\n');
+}
+
+function buildAccountStatusMeta(account) {
+    const failures = toPositiveInt(account?.consecutive_request_failures);
+    const cooldownUntil = formatAccountTimestamp(account?.cooldown_until);
+    const failureTitle = buildAccountFailureTitle(account);
+
+    if (isAccountAutoDisabled(account)) {
+        return {
+            text: '自动禁用',
+            tone: 'tone-danger',
+            detail: cooldownUntil ? `冷却至 ${cooldownUntil}` : (failures > 0 ? `连续失败 ${failures} 次` : ''),
+            title: failureTitle || '账号已因连续失败自动禁用',
+        };
+    }
+    if (isAccountCoolingDown(account)) {
+        return {
+            text: '冷却',
+            tone: 'tone-warning',
+            detail: cooldownUntil ? `冷却至 ${cooldownUntil}` : (failures > 0 ? `连续失败 ${failures} 次` : ''),
+            title: failureTitle || '账号当前处于冷却中',
+        };
+    }
+    if (account?.enabled) {
+        return {
+            text: '启用',
+            tone: 'tone-success',
+            detail: '',
+            title: failureTitle || '账号当前可参与调度',
+        };
+    }
+    return {
+        text: '禁用',
+        tone: 'tone-muted',
+        detail: '',
+        title: failureTitle || '账号当前已禁用',
+    };
+}
+
 function buildAccountStatusText(account) {
-    return account.enabled ? '启用' : '禁用';
+    return buildAccountStatusMeta(account).text;
 }
 
 function normalizePlanLabel(planText) {
@@ -661,10 +765,34 @@ function resolveQuotaProgress(account) {
 
 function buildAccountCapabilityText(account) {
     const planText = normalizePlanLabel(account.plan_tier_name || account.user_tag || account.user_type || '');
+    const helperParts = [];
+    const failures = toPositiveInt(account?.consecutive_request_failures);
+    const cooldownUntil = formatAccountTimestamp(account?.cooldown_until);
+    const failedAt = formatAccountTimestamp(account?.last_request_failed_at);
+    const error = String(account?.last_request_error || '').trim();
+
+    if (isAccountAutoDisabled(account)) {
+        helperParts.push('已自动禁用');
+    }
+    if (isAccountCoolingDown(account) && cooldownUntil) {
+        helperParts.push(`冷却至 ${cooldownUntil}`);
+    }
+    if (failures > 0) {
+        helperParts.push(`连续失败 ${failures} 次`);
+    }
+    if (failedAt) {
+        helperParts.push(`最近失败 ${failedAt}`);
+    }
+    if (error) {
+        helperParts.push(`原因：${truncateText(error, 40)}`);
+    }
+
     return {
         planText,
         quota: resolveQuotaState(account),
         quotaProgress: resolveQuotaProgress(account),
+        helperText: helperParts.join(' · '),
+        helperTitle: buildAccountFailureTitle(account),
     };
 }
 
@@ -686,7 +814,7 @@ function renderAccountsTable(accounts) {
             : '';
         const actions = [];
         const capability = buildAccountCapabilityText(account);
-        const statusTone = account.enabled ? 'tone-success' : 'tone-muted';
+        const statusMeta = buildAccountStatusMeta(account);
         const planTone = resolvePlanTone(capability.planText);
         const quotaProgress = capability.quotaProgress
             ? `
@@ -698,6 +826,27 @@ function renderAccountsTable(accounts) {
                 </div>
             `
             : '';
+        const statusDetail = statusMeta.detail
+            ? `<div class="table-secondary-text" title="${escapeHtmlAttribute(statusMeta.title || statusMeta.detail)}">${escapeHtml(statusMeta.detail)}</div>`
+            : '';
+        const capabilityHelper = capability.helperText
+            ? `<div class="table-secondary-text" title="${escapeHtmlAttribute(capability.helperTitle || capability.helperText)}">${escapeHtml(capability.helperText)}</div>`
+            : '';
+        const testButtonTitle = (() => {
+            if (!account.logged_in_hint) {
+                return '账号当前没有有效登录态，无法测试';
+            }
+            if (isAccountCoolingDown(account)) {
+                return `${statusMeta.title}，但仍可手动测试该账号`; 
+            }
+            if (isAccountAutoDisabled(account)) {
+                return `${statusMeta.title}，可手动重新启用后再测试`;
+            }
+            if (!account.enabled) {
+                return '账号已禁用，请先启用';
+            }
+            return '发送一条测试请求验证账号可用性';
+        })();
 
         actions.push(buildActionButton({
             action: 'detect',
@@ -705,7 +854,9 @@ function renderAccountsTable(accounts) {
             label: '刷新状态',
             icon: 'detect',
             disabled: !account.logged_in_hint,
-            extraAttrs: 'title="实时刷新该账号的套餐、额度与登录状态"',
+            title: account.logged_in_hint
+                ? `实时刷新该账号的套餐、额度与登录状态${statusMeta.title ? `\n\n当前状态：${statusMeta.title}` : ''}`
+                : '账号当前没有有效登录态，无法刷新状态',
         }));
         actions.push(buildActionButton({
             action: 'test',
@@ -713,6 +864,7 @@ function renderAccountsTable(accounts) {
             label: '测试',
             icon: 'test',
             disabled: !account.enabled || !account.logged_in_hint,
+            title: testButtonTitle,
         }));
 
         if (account.managed) {
@@ -721,6 +873,7 @@ function renderAccountsTable(accounts) {
                 accountId: account.id,
                 label: '改名',
                 icon: 'rename',
+                title: '修改该账号在账号池中的显示名称',
             }));
             actions.push(buildActionButton({
                 action: 'toggle',
@@ -728,6 +881,11 @@ function renderAccountsTable(accounts) {
                 label: account.enabled ? '停用' : '启用',
                 icon: account.enabled ? 'toggle_on' : 'toggle_off',
                 extraAttrs: `data-enabled="${account.enabled ? '1' : '0'}"`,
+                title: account.enabled
+                    ? '手动停用该账号'
+                    : (isAccountAutoDisabled(account)
+                        ? `${statusMeta.title}，可手动重新启用`
+                        : '手动启用该账号'),
             }));
             actions.push(buildActionButton({
                 action: 'delete',
@@ -735,6 +893,7 @@ function renderAccountsTable(accounts) {
                 label: '删除',
                 icon: 'delete',
                 variant: 'danger',
+                title: '从账号池中删除该账号',
             }));
         }
 
@@ -744,7 +903,8 @@ function renderAccountsTable(accounts) {
                 ${identitySecondary}
             </td>
             <td class="account-status-cell">
-                <span class="table-badge ${statusTone}">${escapeHtml(buildAccountStatusText(account))}</span>
+                <span class="table-badge ${statusMeta.tone}" title="${escapeHtmlAttribute(statusMeta.title)}">${escapeHtml(statusMeta.text)}</span>
+                ${statusDetail}
             </td>
             <td class="account-capability-cell">
                 <div class="table-badge-row">
@@ -752,6 +912,7 @@ function renderAccountsTable(accounts) {
                     <span class="table-badge ${capability.quota.tone}">${escapeHtml(capability.quota.text)}</span>
                 </div>
                 ${quotaProgress}
+                ${capabilityHelper}
             </td>
             <td class="account-actions-cell">
                 <div class="account-actions-group">${actions.join('')}</div>
