@@ -1306,6 +1306,43 @@ async function refreshAllAccountStatuses() {
     }
 }
 
+function getQuotaLimitedAccounts() {
+    return state.accounts.filter((account) => account?.is_quota_exceeded === true);
+}
+
+async function deleteQuotaLimitedAccounts() {
+    const quotaLimitedAccounts = getQuotaLimitedAccounts();
+    if (!quotaLimitedAccounts.length) {
+        showToast('当前没有标记为额度受限的账号', 'info');
+        return;
+    }
+
+    const previewLabels = quotaLimitedAccounts
+        .slice(0, 3)
+        .map((account) => String(account.email || account.name || account.label || account.id || '').trim())
+        .filter(Boolean);
+    const previewText = previewLabels.length ? `\n\n将删除：${previewLabels.join('、')}` : '';
+    const remainingCount = quotaLimitedAccounts.length - previewLabels.length;
+    const remainingText = remainingCount > 0 ? ` 等另外 ${remainingCount} 个账号` : '';
+    const confirmMessage = `确定删除当前标记为额度受限的 ${quotaLimitedAccounts.length} 个账号吗？${previewText}${remainingText}\n\n此操作不可恢复。`;
+    if (!window.confirm(confirmMessage)) {
+        return;
+    }
+
+    const button = $('accounts-delete-quota-btn');
+    const restoreButton = setActionButtonLoading(button, '删除中');
+    try {
+        const result = await apiRequest(`${ACCOUNTS_API}/delete-quota-limited`, {
+            method: 'POST',
+            body: '{}',
+        });
+        showToast(result.message || '额度受限账号已删除', result.success === false ? 'warning' : 'success');
+        await Promise.all([loadOverview(), loadAccounts()]);
+    } finally {
+        restoreButton();
+    }
+}
+
 async function deleteAccount(accountId) {
     if (!window.confirm('确定要删除这个账号吗？')) {
         return;
@@ -1468,6 +1505,7 @@ function bindEvents() {
     if ($('cancel-registration-btn')) {
         $('cancel-registration-btn').addEventListener('click', cancelRegistration);
     }
+    $('accounts-delete-quota-btn').addEventListener('click', () => deleteQuotaLimitedAccounts().catch((error) => showToast(error.message, 'error')));
     $('accounts-refresh-status-btn').addEventListener('click', () => refreshAllAccountStatuses().catch((error) => showToast(error.message, 'error')));
     $('accounts-refresh-btn').addEventListener('click', () => Promise.all([loadOverview(), loadAccounts()]).catch((error) => showToast(error.message, 'error')));
     $('models-refresh-btn').addEventListener('click', () => Promise.all([loadModels(), loadRuntimeSettings()]).catch((error) => showToast(error.message, 'error')));

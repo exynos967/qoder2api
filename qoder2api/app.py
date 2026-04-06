@@ -440,6 +440,11 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
     }
 
 
+def _is_quota_limited_account(account: QoderAccount) -> bool:
+    status_snapshot = load_account_status(account.qoder_home_path)
+    return status_snapshot is not None and status_snapshot.is_quota_exceeded is True
+
+
 def _coerce_quota_value(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -869,6 +874,43 @@ async def webui_refresh_all_account_statuses() -> dict[str, Any]:
         "message": "，".join(summary_parts),
         "refreshed": refreshed,
         "skipped": skipped,
+        "failed": failed,
+        "accounts": payload["accounts"],
+        "total_accounts": payload["total_accounts"],
+        "enabled_accounts": payload["enabled_accounts"],
+    }
+
+
+@app.post("/webui/api/accounts/delete-quota-limited")
+async def webui_delete_quota_limited_accounts() -> dict[str, Any]:
+    settings = get_settings()
+    accounts = get_account_pool().list_accounts(include_pending=False)
+    quota_limited_accounts = [account for account in accounts if _is_quota_limited_account(account)]
+    deleted: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+
+    for account in quota_limited_accounts:
+        removed = remove_account(settings, account.id)
+        if removed:
+            deleted.append({"id": account.id, "label": account.label})
+        else:
+            failed.append(
+                {
+                    "id": account.id,
+                    "label": account.label,
+                    "reason": "删除时账号不存在或已被移除",
+                }
+            )
+
+    summary_parts = [f"已删除 {len(deleted)} 个额度受限账号"] if deleted else ["没有找到额度受限账号"]
+    if failed:
+        summary_parts.append(f"失败 {len(failed)} 个账号")
+
+    payload = _build_accounts_payload()
+    return {
+        "success": not failed,
+        "message": "，".join(summary_parts),
+        "deleted": deleted,
         "failed": failed,
         "accounts": payload["accounts"],
         "total_accounts": payload["total_accounts"],
