@@ -7,6 +7,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { log } from './utils/logger';
+import { WorkerLifecycleController } from './utils/workerLifecycle';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'config.json');
@@ -14,6 +15,10 @@ const TEMPLATE_CONFIG_FILE = path.join(__dirname, 'config.json.example');
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_CALLBACK_TIMEOUT_SECONDS = 180;
 const DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS = 300;
+const EXIT_CODE_SIGINT = 130;
+const EXIT_CODE_SIGTERM = 143;
+
+const workerLifecycle = new WorkerLifecycleController();
 
 interface WorkerAppConfig {
   backendUrl?: string;
@@ -75,6 +80,11 @@ interface PureLoginHandle {
 interface ManagedProcessHandle {
   result: Promise<void>;
   terminate: () => void;
+}
+
+interface RegistrationSessionResponse {
+  done?: boolean;
+  status?: string;
 }
 
 function isPureLoginSummaryNoise(line: string): boolean {
@@ -300,6 +310,27 @@ async function claimSession(backendUrl: string, sessionId?: string): Promise<Wor
   return payload.session;
 }
 
+async function cancelSession(backendUrl: string, sessionId: string): Promise<void> {
+  await apiRequest<Record<string, unknown>>(
+    backendUrl,
+    `/webui/api/registration/sessions/${sessionId}/cancel`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+async function getSessionSnapshot(
+  backendUrl: string,
+  sessionId: string,
+): Promise<RegistrationSessionResponse> {
+  return apiRequest<RegistrationSessionResponse>(
+    backendUrl,
+    `/webui/api/registration/sessions/${sessionId}`,
+  );
+}
+
 async function startRegistration(backendUrl: string, requestedCount: number): Promise<string | null> {
   const payload = await apiRequest<{ session?: { session_id?: string } | null }>(
     backendUrl,
@@ -323,6 +354,9 @@ async function sendProgress(
   authUrl?: string,
 ): Promise<void> {
   emitLocalProgressLog(line);
+  if (!workerLifecycle.canSendSessionUpdate(sessionId)) {
+    return;
+  }
   await apiRequest<Record<string, unknown>>(
     backendUrl,
     `/webui/api/registration/sessions/${sessionId}/worker/progress`,
@@ -362,7 +396,10 @@ async function sendComplete(
   password: string,
   summary?: Record<string, unknown>,
 ): Promise<void> {
-  await apiRequest<Record<string, unknown>>(
+  if (!workerLifecycle.canSendSessionUpdate(sessionId)) {
+    return;
+  }
+  const payload = await apiRequest<RegistrationSessionResponse>(
     backendUrl,
     `/webui/api/registration/sessions/${sessionId}/worker/complete`,
     {
@@ -370,6 +407,9 @@ async function sendComplete(
       body: JSON.stringify({ email, password, summary }),
     },
   );
+  if (payload.done) {
+    workerLifecycle.clearSession(sessionId);
+  }
 }
 
 function parseLastJsonObject(text: string): Record<string, unknown> | null {
@@ -575,7 +615,10 @@ function startPureLogin(
 }
 
 async function sendFailure(backendUrl: string, sessionId: string, message: string): Promise<void> {
-  await apiRequest<Record<string, unknown>>(
+  if (!workerLifecycle.canSendSessionUpdate(sessionId)) {
+    return;
+  }
+  const payload = await apiRequest<RegistrationSessionResponse>(
     backendUrl,
     `/webui/api/registration/sessions/${sessionId}/worker/fail`,
     {
@@ -583,6 +626,9 @@ async function sendFailure(backendUrl: string, sessionId: string, message: strin
       body: JSON.stringify({ message }),
     },
   );
+  if (payload.done) {
+    workerLifecycle.clearSession(sessionId);
+  }
 }
 
 async function writeRuntimeConfig(
@@ -773,6 +819,7 @@ async function runClaim(
   claim: WorkerClaimPayload,
   appConfig: WorkerAppConfig,
 ): Promise<void> {
+  workerLifecycle.trackSession(claim.session_id);
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'qoder2api-register-'));
   const tsxPath = path.join(__dirname, 'node_modules', '.bin', 'tsx');
   if (!existsSync(tsxPath)) {
@@ -806,6 +853,9 @@ async function runClaim(
       tempDir,
       (line) => sendProgress(backendUrl, claim.session_id, line, 'preparing_oauth', account.email),
     );
+    const unregisterPureLoginTerminator = workerLifecycle.registerTerminator(() => {
+      pureLogin.terminate();
+    });
 
     try {
       const ready = await pureLogin.ready;
@@ -834,10 +884,14 @@ async function runClaim(
           onLine: (line) => sendProgress(backendUrl, claim.session_id, `[oauth] ${line}`, 'oauth_signing_in', account.email, ready.loginUrl),
         },
       );
+      const unregisterOauthTerminator = workerLifecycle.registerTerminator(() => {
+        oauthProcess.terminate();
+      });
       let summary: Record<string, unknown>;
       try {
         summary = await pureLogin.result;
       } finally {
+        unregisterOauthTerminator();
         oauthProcess.terminate();
         await oauthProcess.result.catch(() => undefined);
       }
@@ -846,6 +900,8 @@ async function runClaim(
       pureLogin.terminate();
       await pureLogin.result.catch(() => undefined);
       throw error;
+    } finally {
+      unregisterPureLoginTerminator();
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -858,6 +914,45 @@ async function runClaim(
 
 function printUsage(): void {
   console.log('Usage: npx tsx worker.ts --backend-url http://127.0.0.1:28001 [--session-id ID] [--poll-interval 5] [--once] [--config PATH]');
+}
+
+async function shutdownWorker(
+  backendUrl: string,
+  options: { reason: string },
+): Promise<void> {
+  const { reason } = options;
+  await workerLifecycle.shutdown(async (sessionId) => {
+    const snapshot = await getSessionSnapshot(backendUrl, sessionId).catch(() => null);
+    if (snapshot?.done) {
+      return;
+    }
+    log.warn(`Worker 即将退出，自动结束注册会话 ${sessionId}: ${reason}`);
+    await cancelSession(backendUrl, sessionId);
+  });
+}
+
+function installSignalHandlers(backendUrl: string): void {
+  const handleSignal = (signal: NodeJS.Signals, exitCode: number): void => {
+    void (async () => {
+      try {
+        await shutdownWorker(backendUrl, { reason: `收到 ${signal}` });
+      } catch (error) {
+        log.warn('退出前自动结束注册会话失败', {
+          error: error instanceof Error ? error.message : String(error),
+          signal,
+        });
+      } finally {
+        process.exit(exitCode);
+      }
+    })();
+  };
+
+  process.once('SIGINT', () => {
+    handleSignal('SIGINT', EXIT_CODE_SIGINT);
+  });
+  process.once('SIGTERM', () => {
+    handleSignal('SIGTERM', EXIT_CODE_SIGTERM);
+  });
 }
 
 async function main(): Promise<void> {
@@ -874,6 +969,8 @@ async function main(): Promise<void> {
     throw new Error('缺少 qoder2api 后端地址，请通过 --backend-url、QODERREG_BACKEND_URL 或 config.json.backendUrl 提供');
   }
 
+  workerLifecycle.trackSession(options.sessionId);
+  installSignalHandlers(backendUrl);
   const pollIntervalSeconds = options.pollIntervalSeconds || appConfig.pollIntervalSeconds || DEFAULT_POLL_INTERVAL_SECONDS;
   const autoStart = resolveAutoStart(appConfig);
   let autoStarted = false;
@@ -895,6 +992,7 @@ async function main(): Promise<void> {
       );
       autoStarted = true;
       if (startedSessionId) {
+        workerLifecycle.trackSession(startedSessionId);
         log.info(`已自动创建注册会话: ${startedSessionId}`);
         claim = await claimSession(backendUrl, startedSessionId);
       }
@@ -927,8 +1025,27 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error) => {
-  log.error('注册 Worker 异常退出', {
-    error: error instanceof Error ? error.stack || error.message : String(error),
-  });
-  process.exitCode = 1;
+  void (async () => {
+    const message = error instanceof Error ? error.stack || error.message : String(error);
+    log.error('注册 Worker 异常退出', { error: message });
+    try {
+      const options = parseCliOptions(process.argv.slice(2));
+      const appConfig = loadConfig(options.configFile);
+      const backendUrl = resolveBackendUrl(options, appConfig);
+      if (backendUrl) {
+        try {
+          await shutdownWorker(backendUrl, { reason: '发生未处理错误' });
+        } catch (cleanupError) {
+          log.warn('异常退出前自动结束注册会话失败', {
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
+    } catch (cleanupBootstrapError) {
+      log.warn('异常退出前初始化清理上下文失败', {
+        error: cleanupBootstrapError instanceof Error ? cleanupBootstrapError.message : String(cleanupBootstrapError),
+      });
+    }
+    process.exitCode = 1;
+  })();
 });
