@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { log } from './utils/logger';
 import { WorkerLifecycleController } from './utils/workerLifecycle';
+import { formatWorkerProgressLine } from './utils/workerOutput';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'config.json');
@@ -699,7 +700,10 @@ async function runProcess(
       const remain = lines.pop() || '';
       for (const line of lines) {
         if (line.trim()) {
-          await onLine(`${prefix}${line}`);
+          const formattedLine = formatWorkerProgressLine('register', `${prefix}${line}`);
+          if (formattedLine) {
+            await onLine(formattedLine);
+          }
         }
       }
       return remain;
@@ -721,10 +725,16 @@ async function runProcess(
     child.on('close', (code) => {
       void (async () => {
         if (stdoutBuffer.trim()) {
-          await onLine(stdoutBuffer.trim());
+          const formattedStdout = formatWorkerProgressLine('register', stdoutBuffer.trim());
+          if (formattedStdout) {
+            await onLine(formattedStdout);
+          }
         }
         if (stderrBuffer.trim()) {
-          await onLine(`[stderr] ${stderrBuffer.trim()}`);
+          const formattedStderr = formatWorkerProgressLine('register', `[stderr] ${stderrBuffer.trim()}`);
+          if (formattedStderr) {
+            await onLine(formattedStderr);
+          }
         }
         if (code === 0) {
           resolve();
@@ -761,7 +771,10 @@ function startManagedProcess(
     const remain = lines.pop() || '';
     for (const line of lines) {
       if (line.trim()) {
-        await onLine(`${prefix}${line}`);
+        const formattedLine = formatWorkerProgressLine('oauth', `${prefix}${line}`);
+        if (formattedLine) {
+          await onLine(formattedLine);
+        }
       }
     }
     return remain;
@@ -784,10 +797,16 @@ function startManagedProcess(
     child.on('close', (code, signal) => {
       void (async () => {
         if (stdoutBuffer.trim()) {
-          await onLine(stdoutBuffer.trim());
+          const formattedStdout = formatWorkerProgressLine('oauth', stdoutBuffer.trim());
+          if (formattedStdout) {
+            await onLine(formattedStdout);
+          }
         }
         if (stderrBuffer.trim()) {
-          await onLine(`[stderr] ${stderrBuffer.trim()}`);
+          const formattedStderr = formatWorkerProgressLine('oauth', `[stderr] ${stderrBuffer.trim()}`);
+          if (formattedStderr) {
+            await onLine(formattedStderr);
+          }
         }
         if (terminatedByWorker && signal === 'SIGTERM') {
           resolve();
@@ -837,7 +856,7 @@ async function runClaim(
     );
     await runProcess(tsxPath, ['register.ts', '--config', configPath], {
       cwd: __dirname,
-      onLine: (line) => sendProgress(backendUrl, claim.session_id, `[register] ${line}`, 'registering'),
+      onLine: (line) => sendProgress(backendUrl, claim.session_id, line, 'registering'),
     });
 
     const account = await readLatestAccount(outputFile);
@@ -881,7 +900,7 @@ async function runClaim(
         ],
         {
           cwd: __dirname,
-          onLine: (line) => sendProgress(backendUrl, claim.session_id, `[oauth] ${line}`, 'oauth_signing_in', account.email, ready.loginUrl),
+          onLine: (line) => sendProgress(backendUrl, claim.session_id, line, 'oauth_signing_in', account.email, ready.loginUrl),
         },
       );
       const unregisterOauthTerminator = workerLifecycle.registerTerminator(() => {

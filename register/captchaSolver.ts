@@ -4,15 +4,10 @@
 import type { Page } from 'playwright';
 import type { CaptchaSolveResult, CaptchaMode } from './types';
 import { log } from './utils/logger';
+import { AUTO_MAX_ATTEMPTS, AUTO_TOTAL_TIMEOUT_MS, canStartAutoCaptchaAttempt } from './utils/captchaPolicy';
 
 /** Maximum time to wait for user to solve captcha in manual mode (ms) */
 const MANUAL_TIMEOUT_MS = 180_000;
-
-/** Maximum attempts for auto solve per round before refreshing */
-const AUTO_MAX_ATTEMPTS = 3;
-
-/** Overall timeout for auto mode before giving up (5 minutes) */
-const AUTO_TOTAL_TIMEOUT_MS = 300_000;
 
 /** Poll interval to check if captcha is solved (ms) */
 const POLL_INTERVAL_MS = 500;
@@ -123,7 +118,7 @@ async function solveCaptchaAuto(page: Page, email: string): Promise<CaptchaSolve
 
   // Continuous auto-retry loop until solved or total timeout
   let attempt = 0;
-  while (Date.now() - startTime < AUTO_TOTAL_TIMEOUT_MS) {
+  while (canStartAutoCaptchaAttempt(attempt, startTime, Date.now())) {
     attempt++;
     log.info(`[Auto] Attempt ${attempt}...`);
 
@@ -187,9 +182,12 @@ async function solveCaptchaAuto(page: Page, email: string): Promise<CaptchaSolve
     }
   }
 
-  // Total timeout reached
   const elapsed = Date.now() - startTime;
-  log.error(`[Auto] All attempts exhausted after ${attempt} tries (${elapsed}ms)`);
+  if (attempt >= AUTO_MAX_ATTEMPTS) {
+    log.error(`[Auto] Reached max attempts (${AUTO_MAX_ATTEMPTS}) after ${elapsed}ms`);
+    return { success: false, error: `auto-solve exhausted after ${AUTO_MAX_ATTEMPTS} attempts`, durationMs: elapsed };
+  }
+  log.error(`[Auto] Auto-solve timeout after ${attempt} attempts (${elapsed}ms)`);
   return { success: false, error: `auto-solve timeout after ${attempt} attempts`, durationMs: elapsed };
 }
 
