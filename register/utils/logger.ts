@@ -1,3 +1,5 @@
+import { sanitizeLogMeta, sanitizeLogText } from "./logRedaction";
+
 function nowTime(): string {
   return new Date().toLocaleTimeString("zh-CN", {
     hour12: false,
@@ -10,18 +12,18 @@ function formatMeta(meta?: unknown): string {
   }
 
   if (typeof meta === "string") {
-    return ` ${meta}`;
+    return ` ${sanitizeLogText(meta)}`;
   }
 
   try {
-    return ` ${JSON.stringify(meta)}`;
+    return ` ${JSON.stringify(sanitizeLogMeta(meta))}`;
   } catch {
-    return ` ${String(meta)}`;
+    return ` ${sanitizeLogText(String(meta))}`;
   }
 }
 
 function print(level: string, message: string, meta?: unknown): void {
-  console.log(`[${nowTime()}] [${level}] ${message}${formatMeta(meta)}`);
+  console.log(`[${nowTime()}] [${level}] ${sanitizeLogText(message)}${formatMeta(meta)}`);
 }
 
 export const log = {

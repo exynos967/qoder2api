@@ -10,6 +10,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { solveCaptcha } from "./captchaSolver";
 import { attachDebugRecorder } from "./debug";
 import { log } from "./utils/logger";
+import { isClosedPageLifecycleError } from "./utils/oauthWait";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -665,26 +666,47 @@ async function waitForOauthCompletion(
   const deadline = Date.now() + timeoutSeconds * 1000;
   let lastApproveAttemptAt = 0;
   let lastAccountSelectAttemptAt = 0;
+  let pageClosedLogged = false;
   while (Date.now() < deadline) {
     if (isPureLoginSummaryReady(summaryPath)) {
       log.info(`检测到纯协议登录结果文件，OAuth 已完成: ${summaryPath}`);
       return;
     }
-    const currentUrl = page.url();
-    if (isLocalCallbackUrl(currentUrl)) {
-      log.info(`OAuth 回调已命中本地地址: ${currentUrl}`);
-      return;
+    if (page.isClosed()) {
+      if (!pageClosedLogged) {
+        pageClosedLogged = true;
+        log.warn("OAuth 页面已关闭，转为等待纯协议登录结果文件");
+      }
+      await sleep(1000);
+      continue;
     }
-    const now = Date.now();
-    if (currentUrl.includes("/device/selectAccounts") && now - lastAccountSelectAttemptAt >= 3_000) {
-      lastAccountSelectAttemptAt = now;
-      await trySelectOauthAccount(page, email);
+    try {
+      const currentUrl = page.url();
+      if (isLocalCallbackUrl(currentUrl)) {
+        log.info(`OAuth 回调已命中本地地址: ${currentUrl}`);
+        return;
+      }
+      const now = Date.now();
+      if (currentUrl.includes("/device/selectAccounts") && now - lastAccountSelectAttemptAt >= 3_000) {
+        lastAccountSelectAttemptAt = now;
+        await trySelectOauthAccount(page, email);
+      }
+      if (now - lastApproveAttemptAt >= 3_000) {
+        lastApproveAttemptAt = now;
+        await tryApproveOauth(page);
+      }
+      await page.waitForTimeout(1000);
+    } catch (error) {
+      if (isClosedPageLifecycleError(error)) {
+        if (!pageClosedLogged) {
+          pageClosedLogged = true;
+          log.warn("OAuth 页面或浏览器上下文已关闭，转为等待纯协议登录结果文件");
+        }
+        await sleep(1000);
+        continue;
+      }
+      throw error;
     }
-    if (now - lastApproveAttemptAt >= 3_000) {
-      lastApproveAttemptAt = now;
-      await tryApproveOauth(page);
-    }
-    await page.waitForTimeout(1000);
   }
   if (isPureLoginSummaryReady(summaryPath)) {
     log.info(`等待结束前检测到纯协议登录结果文件，OAuth 已完成: ${summaryPath}`);
@@ -827,8 +849,17 @@ async function main(): Promise<void> {
     }
 
     await sleep(1500);
-    await updateStoredCookies(accountsFile, context, accounts, index);
-    log.info(`登录成功，当前 URL: ${page.url()}`);
+    try {
+      await updateStoredCookies(accountsFile, context, accounts, index);
+    } catch (error) {
+      if (isClosedPageLifecycleError(error)) {
+        log.warn("OAuth 页面或浏览器上下文已关闭，跳过刷新本地 cookies");
+      } else {
+        throw error;
+      }
+    }
+    const finalUrl = page.isClosed() ? "[page-closed]" : page.url();
+    log.info(`登录成功，当前 URL: ${finalUrl}`);
   } finally {
     try {
       await context.close();

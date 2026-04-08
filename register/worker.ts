@@ -7,6 +7,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { log } from './utils/logger';
+import { sanitizeLogText } from './utils/logRedaction';
+import { waitForOauthAndPureLogin } from './utils/oauthCoordination';
 import { WorkerLifecycleController } from './utils/workerLifecycle';
 import { formatWorkerProgressLine } from './utils/workerOutput';
 
@@ -362,7 +364,8 @@ async function sendProgress(
   currentEmail?: string,
   authUrl?: string,
 ): Promise<void> {
-  emitLocalProgressLog(line);
+  const sanitizedLine = sanitizeLogText(line);
+  emitLocalProgressLog(sanitizedLine);
   if (!workerLifecycle.canSendSessionUpdate(sessionId)) {
     return;
   }
@@ -372,7 +375,7 @@ async function sendProgress(
     {
       method: 'POST',
       body: JSON.stringify({
-        line,
+        line: sanitizedLine,
         status,
         current_email: currentEmail,
         auth_url: authUrl,
@@ -915,7 +918,7 @@ async function runClaim(
       });
       let summary: Record<string, unknown>;
       try {
-        summary = await pureLogin.result;
+        summary = await waitForOauthAndPureLogin(oauthProcess.result, pureLogin.result);
       } finally {
         unregisterOauthTerminator();
         oauthProcess.terminate();

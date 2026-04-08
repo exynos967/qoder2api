@@ -1,3 +1,5 @@
+import { sanitizeLogText } from './logRedaction';
+
 const CHILD_LOG_PREFIX = /^\[(\d{2}:\d{2}:\d{2})\]\s+\[(INFO|WARN|ERROR|DEBUG)\]\s*(.*)$/i;
 
 export function formatWorkerProgressLine(scope: string, rawLine: string): string {
@@ -22,5 +24,5 @@ export function formatWorkerProgressLine(scope: string, rawLine: string): string
     }
   }
 
-  return `${stderrPrefix}${levelPrefix}[${scope}] ${line}`.trim();
+  return sanitizeLogText(`${stderrPrefix}${levelPrefix}[${scope}] ${line}`.trim());
 }
