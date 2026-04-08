@@ -7,6 +7,7 @@ import math
 import logging
 import time
 import uuid
+from datetime import datetime, timedelta
 from functools import lru_cache
 from logging.config import dictConfig
 from typing import Any
@@ -382,6 +383,8 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
         "machine_type": account.machine_type or device_metadata.get("machine_type", ""),
         "device_hostname": account.device_hostname or device_metadata.get("device_hostname", ""),
         "device_mac": account.device_mac or device_metadata.get("device_mac", ""),
+        "last_request_started_at": account.last_request_started_at or "",
+        "last_request_succeeded_at": account.last_request_succeeded_at or "",
         "logged_in_hint": auth_state.get("logged_in_hint", False),
         "has_machine_id": auth_state.get("has_machine_id", False),
         "has_user_file": auth_state.get("has_user_file", False),
@@ -438,6 +441,30 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
         "created_at": account.created_at,
         "updated_at": account.updated_at,
     }
+
+
+def _parse_account_timestamp(value: str | None) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _list_recent_logged_in_accounts_for_status_refresh(*, recent_minutes: int = 30) -> list[QoderAccount]:
+    threshold = datetime.now() - timedelta(minutes=max(recent_minutes, 1))
+    candidates: list[tuple[datetime, QoderAccount]] = []
+    for account in get_account_pool().list_accounts(include_pending=False):
+        if not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
+            continue
+        last_started_at = _parse_account_timestamp(account.last_request_started_at)
+        if last_started_at is None or last_started_at < threshold:
+            continue
+        candidates.append((last_started_at, account))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [account for _, account in candidates]
 
 
 def _is_quota_limited_account(account: QoderAccount) -> bool:
@@ -874,6 +901,56 @@ async def webui_refresh_all_account_statuses() -> dict[str, Any]:
         "message": "，".join(summary_parts),
         "refreshed": refreshed,
         "skipped": skipped,
+        "failed": failed,
+        "accounts": payload["accounts"],
+        "total_accounts": payload["total_accounts"],
+        "enabled_accounts": payload["enabled_accounts"],
+    }
+
+
+@app.post("/webui/api/accounts/refresh-recent-statuses")
+async def webui_refresh_recent_account_statuses() -> dict[str, Any]:
+    settings = get_settings()
+    accounts = _list_recent_logged_in_accounts_for_status_refresh()
+    refreshed: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+
+    for account in accounts:
+        try:
+            snapshot = refresh_account_status(settings, account.qoder_home_path)
+        except Exception as exc:
+            failed.append(
+                {
+                    "id": account.id,
+                    "label": account.label,
+                    "reason": str(exc),
+                }
+            )
+            continue
+
+        refreshed.append(
+            {
+                "id": account.id,
+                "label": account.label,
+                "plan_tier_name": snapshot.plan_tier_name,
+                "quota_total": snapshot.quota_total,
+                "quota_used": snapshot.quota_used,
+                "quota_remaining": snapshot.quota_remaining,
+            }
+        )
+
+    payload = _build_accounts_payload()
+    if refreshed:
+        message = f"已自动刷新 {len(refreshed)} 个最近使用账号"
+    elif accounts:
+        message = "最近使用账号自动刷新失败"
+    else:
+        message = "没有最近使用且已登录的账号需要自动刷新"
+
+    return {
+        "success": not failed,
+        "message": message,
+        "refreshed": refreshed,
         "failed": failed,
         "accounts": payload["accounts"],
         "total_accounts": payload["total_accounts"],

@@ -42,6 +42,7 @@ interface CliOptions {
   accountSelector?: string;
   targetUrl?: string;
   configFile?: string;
+  summaryPath?: string;
   callbackTimeoutSeconds: number;
 }
 
@@ -626,6 +627,10 @@ function isLocalCallbackUrl(url: string): boolean {
   return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(url);
 }
 
+function isPureLoginSummaryReady(summaryPath?: string): boolean {
+  return Boolean(summaryPath && existsSync(summaryPath));
+}
+
 async function tryApproveOauth(page: Page): Promise<boolean> {
   const candidates = [
     page.locator("button").filter({
@@ -651,23 +656,39 @@ async function tryApproveOauth(page: Page): Promise<boolean> {
   return false;
 }
 
-async function waitForOauthCompletion(page: Page, timeoutSeconds: number, email: string): Promise<void> {
+async function waitForOauthCompletion(
+  page: Page,
+  timeoutSeconds: number,
+  email: string,
+  summaryPath?: string,
+): Promise<void> {
   const deadline = Date.now() + timeoutSeconds * 1000;
-  let approved = false;
-  let accountSelected = false;
+  let lastApproveAttemptAt = 0;
+  let lastAccountSelectAttemptAt = 0;
   while (Date.now() < deadline) {
+    if (isPureLoginSummaryReady(summaryPath)) {
+      log.info(`检测到纯协议登录结果文件，OAuth 已完成: ${summaryPath}`);
+      return;
+    }
     const currentUrl = page.url();
     if (isLocalCallbackUrl(currentUrl)) {
       log.info(`OAuth 回调已命中本地地址: ${currentUrl}`);
       return;
     }
-    if (!accountSelected && currentUrl.includes("/device/selectAccounts")) {
-      accountSelected = await trySelectOauthAccount(page, email);
+    const now = Date.now();
+    if (currentUrl.includes("/device/selectAccounts") && now - lastAccountSelectAttemptAt >= 3_000) {
+      lastAccountSelectAttemptAt = now;
+      await trySelectOauthAccount(page, email);
     }
-    if (!approved) {
-      approved = await tryApproveOauth(page);
+    if (now - lastApproveAttemptAt >= 3_000) {
+      lastApproveAttemptAt = now;
+      await tryApproveOauth(page);
     }
     await page.waitForTimeout(1000);
+  }
+  if (isPureLoginSummaryReady(summaryPath)) {
+    log.info(`等待结束前检测到纯协议登录结果文件，OAuth 已完成: ${summaryPath}`);
+    return;
   }
   throw new Error(`等待 OAuth 回调超时（>${timeoutSeconds}s）`);
 }
@@ -699,6 +720,11 @@ function parseCliOptions(args: string[]): CliOptions {
     if (arg === '--callback-timeout') {
       const raw = args[index + 1] || '';
       options.callbackTimeoutSeconds = Number.parseInt(raw, 10) || 120;
+      index += 1;
+      continue;
+    }
+    if (arg === '--summary-path') {
+      options.summaryPath = args[index + 1] || '';
       index += 1;
     }
   }
@@ -797,7 +823,7 @@ async function main(): Promise<void> {
       if (!currentUrl.includes("/device/selectAccounts") && !isLocalCallbackUrl(currentUrl)) {
         await openOauthTarget(page, options.targetUrl);
       }
-      await waitForOauthCompletion(page, options.callbackTimeoutSeconds, account.email);
+      await waitForOauthCompletion(page, options.callbackTimeoutSeconds, account.email, options.summaryPath);
     }
 
     await sleep(1500);

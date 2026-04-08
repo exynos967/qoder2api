@@ -10,6 +10,7 @@ import type { Locator, Page } from "playwright-core";
 import { solveCaptcha } from "./captchaSolver";
 import { attachDebugRecorder } from "./debug";
 import { log } from "./utils/logger";
+import { fetchJsonWithRetry, getErrorMessage } from "./utils/mailFetch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -240,6 +241,9 @@ const BROWSER_ACCEPT_LANGUAGES = BROWSER_LANGUAGES.join(",");
 const BROWSER_PROXY = normalizeProxyConfig(APP_CONFIG.proxy);
 const YYDSMAIL_API = APP_CONFIG.mailApiBase || "https://maliapi.215.im/v1";
 const YYDSMAIL_API_KEY = APP_CONFIG.mailApiKey || "AC-0d9d789d3dc8151d1c6c8cac";
+const MAIL_CREATE_ATTEMPTS = 3;
+const MAIL_POLL_ATTEMPTS = 2;
+const MAIL_RETRY_DELAY_MS = 1_500;
 const OUTPUT_FILE = path.isAbsolute(APP_CONFIG.outputFile || "")
   ? (APP_CONFIG.outputFile as string)
   : path.join(__dirname, APP_CONFIG.outputFile || "accounts.json");
@@ -368,17 +372,6 @@ function randomName(): { firstName: string; lastName: string } {
   };
 }
 
-async function fetchJson<T>(url: string, init: RequestInit, timeoutMs = 15_000): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
 async function readJsonArrayFile(filePath: string): Promise<unknown[]> {
   if (!existsSync(filePath)) {
     return [];
@@ -425,7 +418,7 @@ async function collectPageStorage(page: Page): Promise<{
 }
 
 async function createTempEmail(): Promise<TempEmailAccount> {
-  const data = await fetchJson<{ success: boolean; data: TempEmailAccount }>(
+  const data = await fetchJsonWithRetry<{ success: boolean; data: TempEmailAccount }>(
     `${YYDSMAIL_API}/accounts`,
     {
       method: "POST",
@@ -434,6 +427,17 @@ async function createTempEmail(): Promise<TempEmailAccount> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({}),
+    },
+    {
+      attempts: MAIL_CREATE_ATTEMPTS,
+      retryDelayMs: MAIL_RETRY_DELAY_MS,
+      onRetry: ({ attempt, maxAttempts, error }) => {
+        log.warn("创建临时邮箱请求失败，准备重试", {
+          attempt,
+          maxAttempts,
+          error,
+        });
+      },
     },
   );
 
@@ -511,10 +515,11 @@ async function waitForVerificationCode(
 ): Promise<string> {
   log.info(`等待验证码邮件... (超时: ${Math.floor(timeoutMs / 1000)}s)`);
   const start = Date.now();
+  let lastPollError = "";
 
   while (Date.now() - start < timeoutMs) {
     try {
-      const messagesData = await fetchJson<{
+      const messagesData = await fetchJsonWithRetry<{
         success: boolean;
         data?: { messages?: Array<{ id: string; subject?: string; createdAt?: string }> };
       }>(
@@ -523,6 +528,17 @@ async function waitForVerificationCode(
           method: "GET",
           headers: {
             Authorization: `Bearer ${tempToken}`,
+          },
+        },
+        {
+          attempts: MAIL_POLL_ATTEMPTS,
+          retryDelayMs: MAIL_RETRY_DELAY_MS,
+          onRetry: ({ attempt, maxAttempts, error }) => {
+            log.warn("查询邮件列表请求失败，准备重试", {
+              attempt,
+              maxAttempts,
+              error,
+            });
           },
         },
       );
@@ -537,18 +553,44 @@ async function waitForVerificationCode(
       for (const message of messages) {
         log.info(`收到邮件: ${(message.subject || "").slice(0, 60)}`);
 
-        const detailData = await fetchJson<{
+        let detailData: {
           success: boolean;
           data?: { html?: string[]; text?: string };
-        }>(
-          `${YYDSMAIL_API}/messages/${encodeURIComponent(message.id)}`,
-          {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${tempToken}`,
+        };
+
+        try {
+          detailData = await fetchJsonWithRetry<{
+            success: boolean;
+            data?: { html?: string[]; text?: string };
+          }>(
+            `${YYDSMAIL_API}/messages/${encodeURIComponent(message.id)}`,
+            {
+              method: "GET",
+              headers: {
+                Authorization: `Bearer ${tempToken}`,
+              },
             },
-          },
-        );
+            {
+              attempts: MAIL_POLL_ATTEMPTS,
+              retryDelayMs: MAIL_RETRY_DELAY_MS,
+              onRetry: ({ attempt, maxAttempts, error }) => {
+                log.warn("查询邮件详情请求失败，准备重试", {
+                  attempt,
+                  maxAttempts,
+                  messageId: message.id,
+                  error,
+                });
+              },
+            },
+          );
+        } catch (error) {
+          lastPollError = getErrorMessage(error);
+          log.warn("查询邮件详情异常", {
+            messageId: message.id,
+            error: lastPollError,
+          });
+          continue;
+        }
 
         if (!detailData.success || !detailData.data) {
           continue;
@@ -569,18 +611,19 @@ async function waitForVerificationCode(
         });
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = getErrorMessage(error);
+      lastPollError = message;
       log.warn("轮询邮件异常", {
         error: message,
       });
-      if (message.toLowerCase().includes("fetch failed")) {
-        throw new Error(`轮询邮件失败: ${message}`);
-      }
     }
 
     await sleep(pollIntervalMs);
   }
 
+  if (lastPollError) {
+    throw new Error(`获取验证码超时（最后一次异常: ${lastPollError}）`);
+  }
   throw new Error("获取验证码超时");
 }
 

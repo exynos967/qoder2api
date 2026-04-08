@@ -88,6 +88,14 @@ interface RegistrationSessionResponse {
   status?: string;
 }
 
+function resolvePureLoginTimeoutSeconds(config: WorkerAppConfig): number {
+  return Math.max(
+    DEFAULT_CALLBACK_TIMEOUT_SECONDS,
+    Number.parseInt(String(config.pureLoginTimeoutSeconds ?? DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS), 10)
+      || DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS,
+  );
+}
+
 function isPureLoginSummaryNoise(line: string): boolean {
   const normalized = line.trim();
   if (!normalized) {
@@ -444,11 +452,7 @@ function startPureLogin(
   const pureLoginScript = resolvePureLoginScript(config);
   const pythonExecutable = resolvePythonExecutable(config);
   const outputRoot = path.join(tempDir, 'pure-login-output');
-  const timeoutSeconds = Math.max(
-    DEFAULT_CALLBACK_TIMEOUT_SECONDS,
-    Number.parseInt(String(config.pureLoginTimeoutSeconds ?? DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS), 10)
-      || DEFAULT_PURE_LOGIN_TIMEOUT_SECONDS,
-  );
+  const timeoutSeconds = resolvePureLoginTimeoutSeconds(config);
   const child = spawn(
     pythonExecutable,
     [
@@ -893,8 +897,10 @@ async function runClaim(
           account.email,
           '--target-url',
           ready.loginUrl,
+          '--summary-path',
+          ready.summaryPath,
           '--callback-timeout',
-          String(DEFAULT_CALLBACK_TIMEOUT_SECONDS),
+          String(resolvePureLoginTimeoutSeconds(appConfig)),
           '--config',
           configPath,
         ],
@@ -903,6 +909,7 @@ async function runClaim(
           onLine: (line) => sendProgress(backendUrl, claim.session_id, line, 'oauth_signing_in', account.email, ready.loginUrl),
         },
       );
+      void oauthProcess.result.catch(() => undefined);
       const unregisterOauthTerminator = workerLifecycle.registerTerminator(() => {
         oauthProcess.terminate();
       });

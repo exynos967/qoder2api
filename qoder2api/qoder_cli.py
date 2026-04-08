@@ -10,6 +10,7 @@ from .accounts import (
     QoderAccount,
     QoderAccountPool,
     mark_account_request_failure,
+    mark_account_request_started,
     mark_account_request_success,
 )
 from .catalog import QoderModelInfo, load_qoder_models, resolve_model_name
@@ -185,6 +186,14 @@ class QoderCLIInvoker:
         except KeyError:
             return
 
+    def _mark_account_started(self, context: QoderExecutionContext) -> None:
+        if self.account_pool is None or context.account_id in {"default", "legacy-primary"}:
+            return
+        try:
+            mark_account_request_started(self.settings, context.account_id)
+        except KeyError:
+            return
+
     async def run_text(
         self,
         *,
@@ -201,6 +210,7 @@ class QoderCLIInvoker:
         for index, context in enumerate(contexts):
             model_info, resolved_model = self._resolve_model_info(context, model)
             self._validate_attachments(attachments, model_info)
+            self._mark_account_started(context)
             try:
                 output_text = await self.api_client.run_text(
                     qoder_home=context.qoder_home,
@@ -283,6 +293,7 @@ class QoderCLIInvoker:
 
             for index, (context, model_info, _) in enumerate(attempts):
                 emitted_any = False
+                self._mark_account_started(context)
                 try:
                     async for event in self.api_client.stream_chat(
                         qoder_home=context.qoder_home,

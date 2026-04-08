@@ -6,6 +6,8 @@ const SETTINGS_API = '/webui/api/settings';
 const COMPLETIONS_API = '/v1/chat/completions';
 const AUTH_START_API = '/auth/browser/start';
 const REGISTRATION_API = '/webui/api/registration';
+const ACCOUNTS_RECENT_STATUS_REFRESH_API = '/webui/api/accounts/refresh-recent-statuses';
+const ACCOUNTS_RECENT_STATUS_REFRESH_INTERVAL_MS = 1800000;
 
 const PAGE_META = {
     dashboard: {
@@ -40,6 +42,8 @@ const state = {
     registrationSessionDone: true,
     registrationSessionPollTimer: null,
     registrationAuthUrl: '',
+    recentAccountStatusRefreshTimer: null,
+    recentAccountStatusRefreshBusy: false,
     registration: null,
     popup: null,
     models: [],
@@ -269,6 +273,11 @@ function switchPage(page) {
     });
 
     updatePageMeta(page);
+    if (page === 'accounts') {
+        startRecentAccountStatusRefreshPolling();
+    } else {
+        stopRecentAccountStatusRefreshPolling();
+    }
     if (page !== 'accounts' && state.sessionDone && state.registrationSessionDone) {
         clearAuthUrlInput();
     }
@@ -1102,6 +1111,49 @@ function startRegistrationPolling() {
             showToast(error.message, 'error');
         }
     }, 1500);
+}
+
+function stopRecentAccountStatusRefreshPolling() {
+    if (state.recentAccountStatusRefreshTimer) {
+        clearInterval(state.recentAccountStatusRefreshTimer);
+        state.recentAccountStatusRefreshTimer = null;
+    }
+}
+
+async function refreshRecentAccountStatuses({ silent = true } = {}) {
+    if (state.activePage !== 'accounts' || state.recentAccountStatusRefreshBusy) {
+        return null;
+    }
+    state.recentAccountStatusRefreshBusy = true;
+    try {
+        const result = await apiRequest(ACCOUNTS_RECENT_STATUS_REFRESH_API, {
+            method: 'POST',
+            body: '{}',
+        });
+        if (Array.isArray(result.accounts)) {
+            state.accounts = result.accounts;
+            renderAccountsTable(state.accounts);
+        }
+        await loadOverview();
+        if (!silent && result.message) {
+            showToast(result.message, result.success === false ? 'warning' : 'success');
+        }
+        return result;
+    } finally {
+        state.recentAccountStatusRefreshBusy = false;
+    }
+}
+
+function startRecentAccountStatusRefreshPolling() {
+    stopRecentAccountStatusRefreshPolling();
+    void refreshRecentAccountStatuses({ silent: true }).catch((error) => {
+        console.warn('自动刷新最近使用账号状态失败', error);
+    });
+    state.recentAccountStatusRefreshTimer = setInterval(() => {
+        void refreshRecentAccountStatuses({ silent: true }).catch((error) => {
+            console.warn('自动刷新最近使用账号状态失败', error);
+        });
+    }, ACCOUNTS_RECENT_STATUS_REFRESH_INTERVAL_MS);
 }
 
 async function startBrowserLogin() {

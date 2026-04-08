@@ -67,6 +67,8 @@ class QoderAccount(BaseModel):
     machine_type: str = ""
     device_hostname: str = ""
     device_mac: str = ""
+    last_request_started_at: str | None = None
+    last_request_succeeded_at: str | None = None
     consecutive_request_failures: int = 0
     cooldown_until: str | None = None
     last_request_failed_at: str | None = None
@@ -136,6 +138,8 @@ def _normalize_account(account: QoderAccount) -> QoderAccount:
     account.machine_type = (account.machine_type or "").strip()
     account.device_hostname = (account.device_hostname or "").strip()
     account.device_mac = (account.device_mac or "").strip()
+    account.last_request_started_at = str(account.last_request_started_at or "").strip() or None
+    account.last_request_succeeded_at = str(account.last_request_succeeded_at or "").strip() or None
     account.consecutive_request_failures = max(int(account.consecutive_request_failures or 0), 0)
     account.cooldown_until = str(account.cooldown_until or "").strip() or None
     account.last_request_failed_at = str(account.last_request_failed_at or "").strip() or None
@@ -305,6 +309,21 @@ def get_enabled_accounts(settings: Settings) -> list[QoderAccount]:
     ]
 
 
+def mark_account_request_started(settings: Settings, account_id: str) -> QoderAccount:
+    with _ACCOUNT_FILE_LOCK:
+        config = _load_pool_config_unlocked(settings)
+        for index, existing in enumerate(config.accounts):
+            if existing.id != account_id:
+                continue
+            updated = existing.model_copy(deep=True)
+            updated.last_request_started_at = _now_iso()
+            updated.updated_at = _now_iso()
+            config.accounts[index] = _normalize_account(updated)
+            _save_pool_config_unlocked(settings, config)
+            return config.accounts[index]
+    raise KeyError(account_id)
+
+
 def create_pending_managed_account(settings: Settings, label: str = "") -> QoderAccount:
     with _ACCOUNT_FILE_LOCK:
         config = _load_pool_config_unlocked(settings)
@@ -409,6 +428,7 @@ def mark_account_request_success(settings: Settings, account_id: str) -> QoderAc
                 continue
             updated = existing.model_copy(deep=True)
             _reset_request_failure_state(updated)
+            updated.last_request_succeeded_at = _now_iso()
             updated.updated_at = _now_iso()
             config.accounts[index] = _normalize_account(updated)
             _save_pool_config_unlocked(settings, config)
