@@ -28,6 +28,7 @@ class QoderModelInfo:
 
 _DISPLAY_NAME_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
 _PUBLIC_ID_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
+_LEGACY_MODEL_ALIASES = {"gmodel": ("GLM-5",)}
 
 
 
@@ -49,7 +50,7 @@ _FALLBACK_MODELS = [
     QoderModelInfo(id="lite", display_name="Lite", scene="chat", is_vl=False, price_factor=0.0),
     QoderModelInfo(id="qmodel", display_name="Qwen-Coder-Qoder-1.0", scene="chat", is_vl=True, price_factor=0.2),
     QoderModelInfo(id="q35model", display_name="Qwen3.5-Plus", scene="chat", is_vl=True, price_factor=0.2),
-    QoderModelInfo(id="gmodel", display_name="GLM-5", scene="chat", is_vl=True, price_factor=0.5),
+    QoderModelInfo(id="gmodel", display_name="GLM-5.1", scene="chat", is_vl=True, price_factor=0.5),
     QoderModelInfo(id="kmodel", display_name="Kimi-K2.5", scene="chat", is_vl=True, price_factor=0.3),
     QoderModelInfo(id="mmodel", display_name="MiniMax-M2.7", scene="chat", is_vl=True, price_factor=0.2),
 ]
@@ -125,6 +126,7 @@ def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
             _hyphen_alias(model.display_name),
             _hyphen_alias(model.public_id),
         ]
+        raw_aliases.extend(_LEGACY_MODEL_ALIASES.get(model.id, ()))
         if model.id != "mmodel":
             raw_aliases.extend(
                 (
@@ -132,6 +134,7 @@ def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
                     _space_alias(model.public_id),
                 )
             )
+            raw_aliases.extend(_space_alias(alias) for alias in _LEGACY_MODEL_ALIASES.get(model.id, ()))
         for alias in raw_aliases:
             _register_alias(aliases, alias, model.id)
             _register_alias(aliases, f"qoder/{alias}", model.id)
