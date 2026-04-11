@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import logging
@@ -63,6 +64,9 @@ from .schemas import (
 from .settings import Settings
 from . import __version__
 from .webui import build_logs_payload, get_webui_index_path, get_webui_static_dir
+
+_ACCOUNT_STATUS_BULK_REFRESH_CONCURRENCY = 4
+_ACCOUNT_STATUS_BULK_CREDIT_USAGE_TIMEOUT_SECONDS = 5.0
 
 
 def _estimate_tokens(text: str) -> int:
@@ -441,6 +445,93 @@ def _serialize_account(account: QoderAccount) -> dict[str, Any]:
         "created_at": account.created_at,
         "updated_at": account.updated_at,
     }
+
+
+def _account_refresh_payload(account: QoderAccount, snapshot: Any) -> dict[str, Any]:
+    return {
+        "id": account.id,
+        "label": account.label,
+        "plan_tier_name": snapshot.plan_tier_name,
+        "quota_total": snapshot.quota_total,
+        "quota_used": snapshot.quota_used,
+        "quota_remaining": snapshot.quota_remaining,
+    }
+
+
+def _refresh_account_status_for_webui(
+    settings: Settings,
+    qoder_home: Any,
+    *,
+    credit_usage_timeout: float,
+    reuse_cached_credit_usage_on_error: bool,
+) -> Any:
+    try:
+        return refresh_account_status(
+            settings,
+            qoder_home,
+            credit_usage_timeout=credit_usage_timeout,
+            reuse_cached_credit_usage_on_error=reuse_cached_credit_usage_on_error,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+        return refresh_account_status(settings, qoder_home)
+
+
+async def _refresh_accounts_statuses(
+    accounts: list[QoderAccount],
+    *,
+    require_logged_in_hint: bool,
+    credit_usage_timeout: float = 20.0,
+    reuse_cached_credit_usage_on_error: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[dict[str, str]]]:
+    settings = get_settings()
+    refreshed: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    semaphore = asyncio.Semaphore(_ACCOUNT_STATUS_BULK_REFRESH_CONCURRENCY)
+
+    async def _refresh_one(account: QoderAccount) -> tuple[str, dict[str, Any]]:
+        if require_logged_in_hint and not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
+            return (
+                "skipped",
+                {
+                    "id": account.id,
+                    "label": account.label,
+                    "reason": "账号当前没有可用登录态",
+                },
+            )
+
+        try:
+            async with semaphore:
+                snapshot = await asyncio.to_thread(
+                    _refresh_account_status_for_webui,
+                    settings,
+                    account.qoder_home_path,
+                    credit_usage_timeout=credit_usage_timeout,
+                    reuse_cached_credit_usage_on_error=reuse_cached_credit_usage_on_error,
+                )
+        except Exception as exc:
+            return (
+                "failed",
+                {
+                    "id": account.id,
+                    "label": account.label,
+                    "reason": str(exc),
+                },
+            )
+
+        return ("refreshed", _account_refresh_payload(account, snapshot))
+
+    results = await asyncio.gather(*(_refresh_one(account) for account in accounts))
+    for status, payload in results:
+        if status == "refreshed":
+            refreshed.append(payload)
+        elif status == "skipped":
+            skipped.append(payload)
+        else:
+            failed.append(payload)
+    return refreshed, skipped, failed
 
 
 def _parse_account_timestamp(value: str | None) -> datetime | None:
@@ -845,45 +936,13 @@ async def webui_registration_worker_fail(
 
 @app.post("/webui/api/accounts/refresh-statuses")
 async def webui_refresh_all_account_statuses() -> dict[str, Any]:
-    settings = get_settings()
     accounts = get_account_pool().list_accounts(include_pending=False)
-    refreshed: list[dict[str, Any]] = []
-    skipped: list[dict[str, str]] = []
-    failed: list[dict[str, str]] = []
-
-    for account in accounts:
-        if not inspect_local_auth(account.qoder_home_path).get("logged_in_hint"):
-            skipped.append(
-                {
-                    "id": account.id,
-                    "label": account.label,
-                    "reason": "账号当前没有可用登录态",
-                }
-            )
-            continue
-
-        try:
-            snapshot = refresh_account_status(settings, account.qoder_home_path)
-        except Exception as exc:
-            failed.append(
-                {
-                    "id": account.id,
-                    "label": account.label,
-                    "reason": str(exc),
-                }
-            )
-            continue
-
-        refreshed.append(
-            {
-                "id": account.id,
-                "label": account.label,
-                "plan_tier_name": snapshot.plan_tier_name,
-                "quota_total": snapshot.quota_total,
-                "quota_used": snapshot.quota_used,
-                "quota_remaining": snapshot.quota_remaining,
-            }
-        )
+    refreshed, skipped, failed = await _refresh_accounts_statuses(
+        accounts,
+        require_logged_in_hint=True,
+        credit_usage_timeout=_ACCOUNT_STATUS_BULK_CREDIT_USAGE_TIMEOUT_SECONDS,
+        reuse_cached_credit_usage_on_error=True,
+    )
 
     summary_parts: list[str] = []
     if refreshed:
@@ -910,34 +969,13 @@ async def webui_refresh_all_account_statuses() -> dict[str, Any]:
 
 @app.post("/webui/api/accounts/refresh-recent-statuses")
 async def webui_refresh_recent_account_statuses() -> dict[str, Any]:
-    settings = get_settings()
     accounts = _list_recent_logged_in_accounts_for_status_refresh()
-    refreshed: list[dict[str, Any]] = []
-    failed: list[dict[str, str]] = []
-
-    for account in accounts:
-        try:
-            snapshot = refresh_account_status(settings, account.qoder_home_path)
-        except Exception as exc:
-            failed.append(
-                {
-                    "id": account.id,
-                    "label": account.label,
-                    "reason": str(exc),
-                }
-            )
-            continue
-
-        refreshed.append(
-            {
-                "id": account.id,
-                "label": account.label,
-                "plan_tier_name": snapshot.plan_tier_name,
-                "quota_total": snapshot.quota_total,
-                "quota_used": snapshot.quota_used,
-                "quota_remaining": snapshot.quota_remaining,
-            }
-        )
+    refreshed, _skipped, failed = await _refresh_accounts_statuses(
+        accounts,
+        require_logged_in_hint=False,
+        credit_usage_timeout=_ACCOUNT_STATUS_BULK_CREDIT_USAGE_TIMEOUT_SECONDS,
+        reuse_cached_credit_usage_on_error=True,
+    )
 
     payload = _build_accounts_payload()
     if refreshed:

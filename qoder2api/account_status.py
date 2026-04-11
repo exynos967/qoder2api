@@ -5,12 +5,14 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Mapping
 
+import httpx
 from pydantic import BaseModel, Field
 
 from .auth_state import (
@@ -19,10 +21,17 @@ from .auth_state import (
     load_cached_user_info,
     load_machine_id,
 )
+from .runtime_settings import load_runtime_settings
 from .settings import Settings
 
 _ACCOUNT_STATUS_NAME = "account_status.json"
 _DEVICE_METADATA_NAME = "xieyi_device.json"
+_OFFICIAL_STATUS_CLIENT_LIMITS = httpx.Limits(
+    max_connections=16,
+    max_keepalive_connections=8,
+    keepalive_expiry=30.0,
+)
+_OFFICIAL_STATUS_CLIENTS = threading.local()
 
 
 class AccountStatusSnapshot(BaseModel):
@@ -338,8 +347,229 @@ def _load_protocol_module(path_text: str) -> ModuleType:
     return module
 
 
+def _get_official_status_http_client(proxy_url: str) -> httpx.Client:
+    cache = getattr(_OFFICIAL_STATUS_CLIENTS, "clients", None)
+    if cache is None:
+        cache = {}
+        _OFFICIAL_STATUS_CLIENTS.clients = cache
+
+    normalized_proxy = str(proxy_url or "").strip()
+    client = cache.get(normalized_proxy)
+    if client is not None:
+        return client
+
+    client_kwargs: dict[str, Any] = {
+        "http2": True,
+        "follow_redirects": True,
+        "limits": _OFFICIAL_STATUS_CLIENT_LIMITS,
+        "trust_env": not bool(normalized_proxy),
+    }
+    if normalized_proxy:
+        client_kwargs["proxy"] = normalized_proxy
+
+    client = httpx.Client(**client_kwargs)
+    cache[normalized_proxy] = client
+    return client
+
+
+def _request_json_via_http_client(
+    protocol: ModuleType,
+    settings: Settings,
+    *,
+    url: str,
+    headers: Mapping[str, str],
+    method: str = "GET",
+    body: str = "",
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    runtime_settings = load_runtime_settings(settings)
+    client = _get_official_status_http_client(runtime_settings.proxy_url)
+    request_body = body if method.upper() != "GET" else None
+    try:
+        response = client.request(
+            method=method.upper(),
+            url=url,
+            headers=dict(headers),
+            content=request_body,
+            timeout=max(timeout, 1.0),
+        )
+    except httpx.RequestError as exc:
+        curl_json_request = getattr(protocol, "_curl_json_request", None)
+        if callable(curl_json_request):
+            return curl_json_request(
+                url=url,
+                headers=headers,
+                method=method,
+                body=body,
+                timeout=timeout,
+            )
+        raise RuntimeError(str(exc)) from exc
+
+    if response.status_code < 200 or response.status_code >= 300:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text.strip()[:400]}")
+    if not response.content:
+        return {}
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"HTTP 响应不是有效 JSON: {response.text[:400]}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"HTTP 响应 JSON 不是对象: {type(payload)!r}")
+    return payload
+
+
+def _request_official_user_plan(
+    protocol: ModuleType,
+    settings: Settings,
+    *,
+    cached_user_info: Mapping[str, Any],
+    machine_id: str,
+    machine_token: str = "",
+    machine_type: str = "",
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    request = getattr(protocol, "request_official_user_plan", None)
+    build_headers = getattr(protocol, "build_official_authorization_headers", None)
+    center_base = str(getattr(protocol, "OFFICIAL_CENTER_BASE", "https://center.qoder.sh")).rstrip("/")
+    if not callable(build_headers):
+        if callable(request):
+            return request(
+                cached_user_info=cached_user_info,
+                machine_id=machine_id,
+                machine_token=machine_token,
+                machine_type=machine_type,
+                timeout=timeout,
+            )
+        raise AttributeError("纯协议模块缺少 user plan 所需的授权构建函数")
+
+    headers, _ = build_headers(
+        cached_user_info=cached_user_info,
+        machine_id=machine_id,
+        machine_token=machine_token,
+        machine_type=machine_type,
+        sig_path="/api/v2/user/plan",
+        body="",
+    )
+    return _request_json_via_http_client(
+        protocol,
+        settings,
+        url=f"{center_base}/algo/api/v2/user/plan?Encode=1",
+        headers=headers,
+        method="POST",
+        body="",
+        timeout=timeout,
+    )
+
+
+def _request_official_data_policy(
+    protocol: ModuleType,
+    settings: Settings,
+    *,
+    cached_user_info: Mapping[str, Any],
+    machine_id: str,
+    machine_token: str = "",
+    machine_type: str = "",
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    request = getattr(protocol, "request_official_data_policy", None)
+    build_headers = getattr(protocol, "build_official_authorization_headers", None)
+    center_base = str(getattr(protocol, "OFFICIAL_CENTER_BASE", "https://center.qoder.sh")).rstrip("/")
+    if not callable(build_headers):
+        if callable(request):
+            return request(
+                cached_user_info=cached_user_info,
+                machine_id=machine_id,
+                machine_token=machine_token,
+                machine_type=machine_type,
+                timeout=timeout,
+            )
+        raise AttributeError("纯协议模块缺少 data policy 所需的授权构建函数")
+
+    request_id = ""
+    headers, request_id = build_headers(
+        cached_user_info=cached_user_info,
+        machine_id=machine_id,
+        machine_token=machine_token,
+        machine_type=machine_type,
+        sig_path="/api/v2/config/getDataPolicy",
+        body="",
+        request_id=request_id,
+    )
+    return _request_json_via_http_client(
+        protocol,
+        settings,
+        url=(
+            f"{center_base}/algo/api/v2/config/getDataPolicy"
+            f"?requestId={request_id}&version=2"
+        ),
+        headers=headers,
+        method="GET",
+        body="",
+        timeout=timeout,
+    )
+
+
+def _request_official_user_status(
+    protocol: ModuleType,
+    settings: Settings,
+    *,
+    cached_user_info: Mapping[str, Any],
+    machine_id: str,
+    machine_token: str = "",
+    machine_type: str = "",
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    request = getattr(protocol, "request_official_user_status", None)
+    ensure_auth_fields = getattr(protocol, "ensure_official_auth_fields", None)
+    build_body = getattr(protocol, "build_official_user_status_body", None)
+    build_headers = getattr(protocol, "build_official_poll_headers", None)
+    center_base = str(getattr(protocol, "OFFICIAL_CENTER_BASE", "https://center.qoder.sh")).rstrip("/")
+    if not callable(ensure_auth_fields) or not callable(build_body) or not callable(build_headers):
+        if callable(request):
+            return request(
+                cached_user_info=cached_user_info,
+                machine_id=machine_id,
+                machine_token=machine_token,
+                machine_type=machine_type,
+                timeout=timeout,
+            )
+        raise AttributeError("纯协议模块缺少 user status 所需的授权构建函数")
+
+    payload = ensure_auth_fields(cached_user_info)
+    user_id = str(payload.get("uid") or "")
+    if not user_id:
+        raise ValueError("cached_user_info 缺少 uid")
+    body = build_body(
+        user_id=user_id,
+        personal_token=str(payload.get("personal_access_token") or payload.get("access_token") or ""),
+        security_oauth_token=str(payload.get("security_oauth_token") or payload.get("access_token") or ""),
+        refresh_token=str(payload.get("refresh_token") or ""),
+        auth_info={
+            "uid": str(payload.get("uid") or ""),
+            "aid": str(payload.get("aid") or payload.get("uid") or ""),
+            "name": str(payload.get("name") or ""),
+            "orgId": str(payload.get("organization_id") or ""),
+        },
+    )
+    headers = build_headers(
+        machine_id=machine_id,
+        machine_token=machine_token,
+        machine_type=machine_type,
+    )
+    return _request_json_via_http_client(
+        protocol,
+        settings,
+        url=f"{center_base}/algo/api/v3/user/status?Encode=1",
+        headers=headers,
+        method="POST",
+        body=body,
+        timeout=timeout,
+    )
+
+
 def _request_official_credit_usage(
     protocol: ModuleType,
+    settings: Settings,
     *,
     cached_user_info: Mapping[str, Any],
     machine_id: str,
@@ -358,9 +588,8 @@ def _request_official_credit_usage(
         )
 
     build_headers = getattr(protocol, "build_official_authorization_headers", None)
-    curl_json_request = getattr(protocol, "_curl_json_request", None)
     center_base = str(getattr(protocol, "OFFICIAL_CENTER_BASE", "https://center.qoder.sh")).rstrip("/")
-    if not callable(build_headers) or not callable(curl_json_request):
+    if not callable(build_headers):
         raise AttributeError("纯协议模块缺少 credit usage 所需的授权构建函数")
 
     headers, _ = build_headers(
@@ -371,7 +600,9 @@ def _request_official_credit_usage(
         sig_path="/api/v2/quota/usage",
         body="",
     )
-    return curl_json_request(
+    return _request_json_via_http_client(
+        protocol,
+        settings,
         url=f"{center_base}/algo/api/v2/quota/usage?Encode=1",
         headers=headers,
         method="POST",
@@ -380,7 +611,49 @@ def _request_official_credit_usage(
     )
 
 
-def refresh_account_status(settings: Settings, qoder_home: Path) -> AccountStatusSnapshot:
+def _build_credit_usage_fallback_payload(snapshot: AccountStatusSnapshot | None) -> dict[str, Any]:
+    if snapshot is None:
+        return {}
+    if snapshot.credit_usage_payload:
+        return dict(snapshot.credit_usage_payload)
+
+    user_quota: dict[str, Any] = {}
+    if snapshot.quota_total is not None:
+        user_quota["total"] = snapshot.quota_total
+    if snapshot.quota_used is not None:
+        user_quota["used"] = snapshot.quota_used
+    if snapshot.quota_remaining is not None:
+        user_quota["remaining"] = snapshot.quota_remaining
+    if snapshot.quota_percentage is not None:
+        user_quota["percentage"] = snapshot.quota_percentage
+    if snapshot.quota_unit:
+        user_quota["unit"] = snapshot.quota_unit
+    if snapshot.quota_detail_url:
+        user_quota["detailUrl"] = snapshot.quota_detail_url
+
+    payload: dict[str, Any] = {}
+    if snapshot.total_usage_percentage is not None:
+        payload["totalUsagePercentage"] = snapshot.total_usage_percentage
+    if snapshot.is_quota_exceeded is not None:
+        payload["isQuotaExceeded"] = snapshot.is_quota_exceeded
+    if user_quota:
+        payload["userQuota"] = user_quota
+    if snapshot.quota_expires_at is not None:
+        payload["expiresAt"] = snapshot.quota_expires_at
+    if snapshot.add_credits_url:
+        payload["addCreditsUrl"] = snapshot.add_credits_url
+    if snapshot.upgrade_url:
+        payload["upgradeUrl"] = snapshot.upgrade_url
+    return payload
+
+
+def refresh_account_status(
+    settings: Settings,
+    qoder_home: Path,
+    *,
+    credit_usage_timeout: float = 20.0,
+    reuse_cached_credit_usage_on_error: bool = False,
+) -> AccountStatusSnapshot:
     cached_user_info = load_cached_user_info(qoder_home)
     if cached_user_info is None:
         raise ValueError("账号当前没有可用登录态")
@@ -394,20 +667,27 @@ def refresh_account_status(settings: Settings, qoder_home: Path) -> AccountStatu
     cached_payload = cached_user_info.model_dump(by_alias=True, exclude_none=True)
     machine_token = device_metadata.get("machine_token", "")
     machine_type = device_metadata.get("machine_type", "")
+    cached_snapshot = load_account_status(qoder_home)
 
-    user_status = protocol.request_official_user_status(
+    user_status = _request_official_user_status(
+        protocol,
+        settings,
         cached_user_info=cached_payload,
         machine_id=machine_id,
         machine_token=machine_token,
         machine_type=machine_type,
     )
-    data_policy = protocol.request_official_data_policy(
+    data_policy = _request_official_data_policy(
+        protocol,
+        settings,
         cached_user_info=cached_payload,
         machine_id=machine_id,
         machine_token=machine_token,
         machine_type=machine_type,
     )
-    user_plan = protocol.request_official_user_plan(
+    user_plan = _request_official_user_plan(
+        protocol,
+        settings,
         cached_user_info=cached_payload,
         machine_id=machine_id,
         machine_token=machine_token,
@@ -419,13 +699,17 @@ def refresh_account_status(settings: Settings, qoder_home: Path) -> AccountStatu
     try:
         credit_usage = _request_official_credit_usage(
             protocol,
+            settings,
             cached_user_info=cached_payload,
             machine_id=machine_id,
             machine_token=machine_token,
             machine_type=machine_type,
+            timeout=credit_usage_timeout,
         )
     except Exception as exc:
         credit_usage_error = str(exc)
+        if reuse_cached_credit_usage_on_error:
+            credit_usage = _build_credit_usage_fallback_payload(cached_snapshot)
 
     snapshot = build_account_status_snapshot(
         cached_user_info=cached_payload,

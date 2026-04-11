@@ -36,6 +36,7 @@ interface WorkerAppConfig {
   debugDir?: string;
   mailApiBase?: string;
   mailApiKey?: string;
+  outputFile?: string;
   pythonExecutable?: string;
   pureLoginScript?: string;
   pureLoginTimeoutSeconds?: number;
@@ -644,7 +645,9 @@ async function writeRuntimeConfig(
   tempDir: string,
   appConfig: WorkerAppConfig,
 ): Promise<{ configPath: string; outputFile: string }> {
-  const outputFile = path.join(tempDir, 'accounts.json');
+  const outputFile = path.isAbsolute(appConfig.outputFile || '')
+    ? (appConfig.outputFile as string)
+    : path.join(__dirname, appConfig.outputFile || 'accounts.json');
   const configPath = path.join(tempDir, 'worker-config.json');
   const hasLocalProxy = Object.prototype.hasOwnProperty.call(appConfig, 'proxy');
   const mergedProxy = hasLocalProxy ? (appConfig.proxy ?? null) : null;
