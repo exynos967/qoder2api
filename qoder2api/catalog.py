@@ -27,7 +27,18 @@ class QoderModelInfo:
 
 
 _DISPLAY_NAME_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
-_PUBLIC_ID_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
+_PUBLIC_ID_OVERRIDES = {
+    "ultimate": "claude-opus-4-6",
+    "performance": "claude-sonnet-4-6",
+    "auto": "auto",
+    "efficient": "efficient",
+    "lite": "lite",
+    "qmodel": "qwen-coder-qoder-1.0",
+    "q35model": "qwen3.5-plus",
+    "gmodel": "glm-5.1",
+    "kmodel": "kimi-k2.5",
+    "mmodel": "minimax-m2.7",
+}
 
 
 

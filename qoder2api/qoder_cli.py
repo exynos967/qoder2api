@@ -250,7 +250,7 @@ class QoderCLIInvoker:
                 raise
 
             self._mark_account_success(context)
-            return output_text, resolved_model
+            return output_text, model_info.public_id
 
         if last_error is None:
             raise QoderCLIError("账号池中没有可用账号", status_code=401, error_type="authentication_error")
@@ -336,4 +336,4 @@ class QoderCLIInvoker:
             if stream_error is not None:
                 raise stream_error
 
-        return _api_iterator(), attempts[0][2]
+        return _api_iterator(), attempts[0][1].public_id
