@@ -28,7 +28,6 @@ class QoderModelInfo:
 
 _DISPLAY_NAME_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
 _PUBLIC_ID_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
-_LEGACY_MODEL_ALIASES = {"gmodel": ("GLM-5",)}
 
 
 
@@ -126,7 +125,6 @@ def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
             _hyphen_alias(model.display_name),
             _hyphen_alias(model.public_id),
         ]
-        raw_aliases.extend(_LEGACY_MODEL_ALIASES.get(model.id, ()))
         if model.id != "mmodel":
             raw_aliases.extend(
                 (
@@ -134,7 +132,6 @@ def build_model_aliases(models: list[QoderModelInfo]) -> dict[str, str]:
                     _space_alias(model.public_id),
                 )
             )
-            raw_aliases.extend(_space_alias(alias) for alias in _LEGACY_MODEL_ALIASES.get(model.id, ()))
         for alias in raw_aliases:
             _register_alias(aliases, alias, model.id)
             _register_alias(aliases, f"qoder/{alias}", model.id)
