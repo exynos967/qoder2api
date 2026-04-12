@@ -347,6 +347,10 @@ def _load_protocol_module(path_text: str) -> ModuleType:
     return module
 
 
+def _is_http2_supported() -> bool:
+    return importlib.util.find_spec("h2") is not None
+
+
 def _get_official_status_http_client(proxy_url: str) -> httpx.Client:
     cache = getattr(_OFFICIAL_STATUS_CLIENTS, "clients", None)
     if cache is None:
@@ -354,12 +358,13 @@ def _get_official_status_http_client(proxy_url: str) -> httpx.Client:
         _OFFICIAL_STATUS_CLIENTS.clients = cache
 
     normalized_proxy = str(proxy_url or "").strip()
-    client = cache.get(normalized_proxy)
+    cache_key = (normalized_proxy, _is_http2_supported())
+    client = cache.get(cache_key)
     if client is not None:
         return client
 
     client_kwargs: dict[str, Any] = {
-        "http2": True,
+        "http2": cache_key[1],
         "follow_redirects": True,
         "limits": _OFFICIAL_STATUS_CLIENT_LIMITS,
         "trust_env": not bool(normalized_proxy),
@@ -368,7 +373,7 @@ def _get_official_status_http_client(proxy_url: str) -> httpx.Client:
         client_kwargs["proxy"] = normalized_proxy
 
     client = httpx.Client(**client_kwargs)
-    cache[normalized_proxy] = client
+    cache[cache_key] = client
     return client
 
 
