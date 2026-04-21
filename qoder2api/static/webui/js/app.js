@@ -246,11 +246,17 @@ function resolveRegistrationStatusMeta(status) {
     }
 }
 
+function getBrowserLoginButtons() {
+    return ['start-login-btn', 'accounts-oauth-login-btn']
+        .map((id) => $(id))
+        .filter((button) => Boolean(button));
+}
+
 function updateRegistrationActionState() {
     const startRegistrationButton = $('start-registration-btn');
     const cancelRegistrationButton = $('cancel-registration-btn');
-    const startLoginButton = $('start-login-btn');
-    if (!startRegistrationButton || !cancelRegistrationButton || !startLoginButton) {
+    const browserLoginButtons = getBrowserLoginButtons();
+    if (!startRegistrationButton || !cancelRegistrationButton) {
         return;
     }
     const registrationBusy = !state.registrationSessionDone;
@@ -258,7 +264,9 @@ function updateRegistrationActionState() {
     const available = Boolean(state.registration?.available);
     startRegistrationButton.disabled = !available || registrationBusy || browserLoginBusy;
     cancelRegistrationButton.disabled = !registrationBusy;
-    startLoginButton.disabled = registrationBusy || browserLoginBusy;
+    browserLoginButtons.forEach((button) => {
+        button.disabled = registrationBusy || browserLoginBusy;
+    });
 }
 
 function switchPage(page) {
@@ -1157,10 +1165,9 @@ function startRecentAccountStatusRefreshPolling() {
 }
 
 async function startBrowserLogin() {
-    const startLoginButton = $('start-login-btn');
-    if (startLoginButton) {
-        startLoginButton.disabled = true;
-    }
+    getBrowserLoginButtons().forEach((button) => {
+        button.disabled = true;
+    });
     clearAuthUrlInput();
     try {
         const data = await apiRequest(AUTH_START_API, {
@@ -1180,9 +1187,7 @@ async function startBrowserLogin() {
     } catch (error) {
         showToast(error.message, 'error');
     } finally {
-        if (startLoginButton) {
-            startLoginButton.disabled = false;
-        }
+        updateRegistrationActionState();
     }
 }
 
@@ -1570,6 +1575,9 @@ function bindEvents() {
     bindToggleSwitch('settings-debug-logging-enabled');
     if ($('start-login-btn')) {
         $('start-login-btn').addEventListener('click', startBrowserLogin);
+    }
+    if ($('accounts-oauth-login-btn')) {
+        $('accounts-oauth-login-btn').addEventListener('click', startBrowserLogin);
     }
     if ($('open-auth-url-btn')) {
         $('open-auth-url-btn').addEventListener('click', openAuthUrl);
