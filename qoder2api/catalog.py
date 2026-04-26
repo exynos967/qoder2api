@@ -26,7 +26,14 @@ class QoderModelInfo:
         return _normalize_public_id(self.id, self.display_name)
 
 
-_DISPLAY_NAME_OVERRIDES = {"ultimate": "claude-opus-4-6", "performance": "claude-sonnet-4-6", "mmodel": "MiniMax-M2.7"}
+_DISPLAY_NAME_OVERRIDES = {
+    "ultimate": "claude-opus-4-6",
+    "performance": "claude-sonnet-4-6",
+    "mmodel": "MiniMax-M2.7",
+    "gpt-5.4": "GPT-5.4",
+    "gpt_5_4": "GPT-5.4",
+    "gpt54": "GPT-5.4",
+}
 _PUBLIC_ID_OVERRIDES = {
     "ultimate": "claude-opus-4-6",
     "performance": "claude-sonnet-4-6",
@@ -38,6 +45,9 @@ _PUBLIC_ID_OVERRIDES = {
     "gmodel": "glm-5.1",
     "kmodel": "kimi-k2.5",
     "mmodel": "minimax-m2.7",
+    "gpt-5.4": "gpt-5.4",
+    "gpt_5_4": "gpt-5.4",
+    "gpt54": "gpt-5.4",
 }
 
 
@@ -52,10 +62,20 @@ def _normalize_public_id(model_id: str, display_name: str) -> str:
     return normalized or model_id
 
 
+_GPT54_MODEL = QoderModelInfo(
+    id="gpt-5.4",
+    display_name="GPT-5.4",
+    scene="chat",
+    is_reasoning=True,
+    is_vl=True,
+    price_factor=1.6,
+)
+
 _FALLBACK_MODELS = [
     QoderModelInfo(id="auto", display_name="Auto", scene="chat", is_default=True, is_vl=True, price_factor=1.0),
     QoderModelInfo(id="ultimate", display_name="claude-opus-4-6", scene="chat", is_reasoning=True, is_vl=True, price_factor=1.6),
     QoderModelInfo(id="performance", display_name="claude-sonnet-4-6", scene="chat", is_vl=True, price_factor=1.1),
+    _GPT54_MODEL,
     QoderModelInfo(id="efficient", display_name="Efficient", scene="chat", is_vl=True, price_factor=0.3),
     QoderModelInfo(id="lite", display_name="Lite", scene="chat", is_vl=False, price_factor=0.0),
     QoderModelInfo(id="qmodel", display_name="Qwen-Coder-Qoder-1.0", scene="chat", is_vl=True, price_factor=0.2),
@@ -65,9 +85,38 @@ _FALLBACK_MODELS = [
     QoderModelInfo(id="mmodel", display_name="MiniMax-M2.7", scene="chat", is_vl=True, price_factor=0.2),
 ]
 
+_EXTRA_BUILTIN_MODELS = [_GPT54_MODEL]
+
 
 def _normalize_display_name(model_id: str, display_name: str) -> str:
     return _DISPLAY_NAME_OVERRIDES.get(model_id, display_name)
+
+
+def _model_identity_values(model: QoderModelInfo) -> set[str]:
+    return {
+        value
+        for value in (
+            model.id.strip().lower(),
+            model.display_name.strip().lower(),
+            model.public_id.strip().lower(),
+        )
+        if value
+    }
+
+
+def _ensure_extra_builtin_models(models: list[QoderModelInfo]) -> list[QoderModelInfo]:
+    result = list(models)
+    existing = set[str]()
+    for model in result:
+        existing.update(_model_identity_values(model))
+
+    for model in _EXTRA_BUILTIN_MODELS:
+        identities = _model_identity_values(model)
+        if existing.isdisjoint(identities):
+            result.append(model)
+            existing.update(identities)
+
+    return result
 
 
 def load_qoder_models(qoder_home: Path, scene: str = "chat") -> list[QoderModelInfo]:
@@ -108,7 +157,10 @@ def load_qoder_models(qoder_home: Path, scene: str = "chat") -> list[QoderModelI
             )
         )
 
-    return parsed_models or list(_FALLBACK_MODELS)
+    if not parsed_models:
+        return list(_FALLBACK_MODELS)
+
+    return _ensure_extra_builtin_models(parsed_models)
 
 
 def _register_alias(aliases: dict[str, str], alias: str, target: str) -> None:
